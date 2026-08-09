@@ -1,0 +1,517 @@
+import {
+  Gw2ccError,
+  toErrorPayload,
+  type AccountRepository,
+  type CharacterSnapshot,
+  type Gw2Gateway,
+  type LlmToolCall,
+  type LlmToolDefinition,
+  type QueryValue,
+  type SecretStore,
+  type ToolExecutionContext,
+  type ToolExecutionOutcome,
+  type ToolExecutor
+} from '@gw2cc/core';
+import { z } from 'zod';
+import { boundToolResult } from './results';
+
+const TOOL_TIMEOUT_MS = 15_000;
+
+const emptySchema = z.object({}).strict();
+const characterSchema = z.object({ name: z.string().trim().min(1).max(128).optional() }).strict();
+const itemSchema = z.object({ id: z.number().int().positive() }).strict();
+const itemsSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(50) }).strict();
+const pageSchema = z.object({
+  offset: z.number().int().min(0).max(100_000).default(0),
+  limit: z.number().int().min(1).max(200).default(100)
+}).strict();
+const characterInventorySchema = characterSchema.extend({
+  offset: z.number().int().min(0).max(100_000).default(0),
+  limit: z.number().int().min(1).max(200).default(100)
+}).strict();
+const queryValueSchema = z.union([
+  z.string().max(2_000),
+  z.number().finite(),
+  z.boolean(),
+  z.array(z.union([z.string().max(2_000), z.number().finite(), z.boolean()])).max(200)
+]);
+const v2Schema = z.object({
+  path: z.string().min(4).max(400).refine((path) => (
+    path.startsWith('/v2/') &&
+    !path.includes('\\') &&
+    !path.includes('?') &&
+    !path.includes('#') &&
+    !path.includes('\0') &&
+    !path.split('/').some((segment) => segment === '.' || segment === '..')
+  ), 'Path must be a clean absolute ArenaNet /v2/ path.'),
+  query: z.record(z.string().regex(/^[a-zA-Z0-9_]+$/), queryValueSchema).default({}),
+  pagination: z.object({
+    mode: z.enum(['single', 'all']).default('single'),
+    page: z.number().int().min(0).max(100_000).default(0),
+    pageSize: z.number().int().min(1).max(200).default(100),
+    maxPages: z.number().int().min(1).max(5).default(3)
+  }).strict().default({ mode: 'single', page: 0, pageSize: 100, maxPages: 3 })
+}).strict();
+const liveAccountSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  world: z.number().int().optional()
+}).passthrough();
+const liveCharactersSchema = z.array(z.string());
+const accountItemSchema = z.object({
+  id: z.number().int().positive(),
+  count: z.number().int().nonnegative(),
+  charges: z.number().int().optional(),
+  skin: z.number().int().optional(),
+  upgrades: z.array(z.number().int()).optional(),
+  infusions: z.array(z.number().int()).optional(),
+  binding: z.string().optional(),
+  bound_to: z.string().optional(),
+  stats: z.object({ id: z.number().int(), attributes: z.record(z.string(), z.number()).optional() }).passthrough().optional()
+}).passthrough();
+const accountSlotsSchema = z.array(accountItemSchema.nullable());
+const materialSchema = z.object({
+  id: z.number().int().positive(),
+  category: z.number().int().optional(),
+  count: z.number().int().nonnegative()
+}).passthrough();
+const walletSchema = z.object({ id: z.number().int().positive(), value: z.number().finite() }).passthrough();
+const achievementSchema = z.object({
+  id: z.number().int().positive(),
+  current: z.number().optional(),
+  max: z.number().optional(),
+  done: z.boolean().optional(),
+  repeated: z.number().optional(),
+  bits: z.array(z.number().int()).optional()
+}).passthrough();
+const characterBagsSchema = z.object({
+  bags: z.array(z.object({
+    id: z.number().int().positive(),
+    size: z.number().int().nonnegative(),
+    inventory: z.array(accountItemSchema.nullable())
+  }).passthrough().nullable())
+}).passthrough();
+
+const characterInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { name: { type: 'string', description: 'Character name. Omit to use the focused character.' } }
+};
+const pageInputSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    offset: { type: 'integer', minimum: 0, maximum: 100000, default: 0 },
+    limit: { type: 'integer', minimum: 1, maximum: 200, default: 100 }
+  }
+};
+const characterInventoryInputSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'Character name. Omit to use the focused character.' },
+    offset: { type: 'integer', minimum: 0, maximum: 100000, default: 0 },
+    limit: { type: 'integer', minimum: 1, maximum: 200, default: 100 }
+  }
+};
+
+const DEFINITIONS: readonly LlmToolDefinition[] = [
+  {
+    name: 'gw2_get_account',
+    description: 'Get the connected GW2 account identity and detected API permissions.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
+    name: 'gw2_list_characters',
+    description: 'List characters on the connected GW2 account.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
+    name: 'gw2_get_character',
+    description: 'Get the normalized summary for a character, defaulting to the currently focused character.',
+    inputSchema: characterInputSchema
+  },
+  {
+    name: 'gw2_get_character_equipment',
+    description: 'Get normalized active equipment for a character with structured stat provenance.',
+    inputSchema: characterInputSchema
+  },
+  {
+    name: 'gw2_get_character_build',
+    description: 'Get the normalized active PvE build inspection for a character.',
+    inputSchema: characterInputSchema
+  },
+  {
+    name: 'gw2_get_character_attributes',
+    description: 'Get the deterministic AttributeReport baseline, completeness, provenance, and omissions for a character.',
+    inputSchema: characterInputSchema
+  },
+  {
+    name: 'gw2_get_item',
+    description: 'Get one public ArenaNet GW2 item definition by numeric ID.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['id'],
+      properties: { id: { type: 'integer', minimum: 1 } }
+    }
+  },
+  {
+    name: 'gw2_get_items',
+    description: 'Batch-get up to 50 public ArenaNet GW2 item definitions by numeric ID.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['ids'],
+      properties: { ids: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'integer', minimum: 1 } } }
+    }
+  },
+  {
+    name: 'gw2_get_bank',
+    description: 'Get a bounded page of non-empty account bank slots. Requires the GW2 inventories permission.',
+    inputSchema: pageInputSchema
+  },
+  {
+    name: 'gw2_get_shared_inventory',
+    description: 'Get a bounded page of non-empty account shared-inventory slots. Requires the GW2 inventories permission.',
+    inputSchema: pageInputSchema
+  },
+  {
+    name: 'gw2_get_character_inventory',
+    description: 'Get a bounded flattened page of non-empty bag slots for a character. Requires the GW2 inventories permission.',
+    inputSchema: characterInventoryInputSchema
+  },
+  {
+    name: 'gw2_get_wallet',
+    description: 'Get the account wallet currency IDs and values. Requires the GW2 wallet permission.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
+    name: 'gw2_get_achievements',
+    description: 'Get a bounded page of account achievement progress. Requires the GW2 progression permission.',
+    inputSchema: pageInputSchema
+  },
+  {
+    name: 'gw2_get_materials',
+    description: 'Get a bounded page of non-empty account material-storage entries. Requires the GW2 inventories permission.',
+    inputSchema: pageInputSchema
+  },
+  {
+    name: 'gw2_get_v2',
+    description: 'Perform a bounded authenticated GET against the fixed ArenaNet host for a clean /v2/ path. No arbitrary hosts, methods, headers, or credentials are accepted.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['path'],
+      properties: {
+        path: { type: 'string', pattern: '^/v2/' },
+        query: {
+          type: 'object',
+          additionalProperties: {
+            anyOf: [
+              { type: 'string' }, { type: 'number' }, { type: 'boolean' },
+              { type: 'array', maxItems: 200, items: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }] } }
+            ]
+          }
+        },
+        pagination: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            mode: { type: 'string', enum: ['single', 'all'], default: 'single' },
+            page: { type: 'integer', minimum: 0, maximum: 100000, default: 0 },
+            pageSize: { type: 'integer', minimum: 1, maximum: 200, default: 100 },
+            maxPages: { type: 'integer', minimum: 1, maximum: 5, default: 3 }
+          }
+        }
+      }
+    }
+  }
+];
+
+function compactEquipment(snapshot: CharacterSnapshot): unknown {
+  return snapshot.equipment.map((entry) => ({
+    slot: entry.slot,
+    itemId: entry.itemId,
+    name: entry.item.name,
+    type: entry.item.type,
+    subtype: entry.item.subtype,
+    rarity: entry.item.rarity,
+    statId: entry.statId,
+    statName: entry.statName,
+    statSource: entry.statSource,
+    attributes: entry.attributes,
+    upgrades: entry.upgrades.map((upgrade) => ({ id: upgrade.id, name: upgrade.name, attributes: upgrade.attributes })),
+    infusions: entry.infusions.map((infusion) => ({ id: infusion.id, name: infusion.name, attributes: infusion.attributes }))
+  }));
+}
+
+function arenaNetProvenance(endpoint: string): Record<string, unknown> {
+  return { kind: 'arenanet_api', sourceName: 'Guild Wars 2 v2 API', endpoint };
+}
+
+function pageResult<T>(entries: T[], offset: number, limit: number): { entries: T[]; pagination: Record<string, unknown> } {
+  const page = entries.slice(offset, offset + limit);
+  return {
+    entries: page,
+    pagination: {
+      offset,
+      limit,
+      returned: page.length,
+      totalAvailable: entries.length,
+      hasMore: offset + page.length < entries.length
+    }
+  };
+}
+
+function normalizeSlots(slots: Array<z.infer<typeof accountItemSchema> | null>): Array<Record<string, unknown>> {
+  return slots.flatMap((entry, slot) => entry ? [{ slot, ...entry }] : []);
+}
+
+export class Gw2ToolExecutor implements ToolExecutor {
+  constructor(
+    private readonly gateway: Gw2Gateway,
+    private readonly secrets: SecretStore,
+    private readonly accounts: AccountRepository
+  ) {}
+
+  definitions(): readonly LlmToolDefinition[] {
+    return DEFINITIONS;
+  }
+
+  async execute(call: LlmToolCall, context: ToolExecutionContext): Promise<ToolExecutionOutcome> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    context.signal.addEventListener('abort', onAbort, { once: true });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TOOL_TIMEOUT_MS);
+    try {
+      if (context.signal.aborted) throw new Gw2ccError('CANCELLED', 'Tool execution was cancelled.');
+      const apiKey = await this.secrets.get('gw2-api-key');
+      if (!apiKey) throw new Gw2ccError('GW2_NOT_CONNECTED', 'Connect a Guild Wars 2 API key before using GW2 tools.');
+      const account = await this.accounts.getActive();
+      if (!account) throw new Gw2ccError('GW2_NOT_CONNECTED', 'No active Guild Wars 2 account is connected.');
+      const resolveName = (input: { name?: string }): string => {
+        const name = input.name ?? context.focusedCharacterName ?? account.selectedCharacterName;
+        if (!name) throw new Gw2ccError('GW2_RESOURCE_NOT_FOUND', 'No focused character is available for this tool call.');
+        if (!account.characterNames.includes(name)) {
+          throw new Gw2ccError('GW2_RESOURCE_NOT_FOUND', `Character “${name}” is not available on the connected account.`);
+        }
+        return name;
+      };
+      const requirePermission = (feature: string, ...permissions: string[]) => {
+        const available = new Set(account.permissions);
+        const missing = permissions.filter((permission) => !available.has(permission));
+        if (missing.length > 0) {
+          throw new Gw2ccError(
+            'GW2_PERMISSION_MISSING',
+            `${feature} requires the ${missing.join(' and ')} GW2 API key permission${missing.length === 1 ? '' : 's'}.`,
+            { details: { feature, requiredPermissions: permissions, missingPermissions: missing } }
+          );
+        }
+      };
+      const snapshot = async (input: { name?: string }) => this.gateway.getCharacterSnapshot(
+        apiKey,
+        resolveName(input),
+        false,
+        controller.signal
+      );
+
+      switch (call.name) {
+        case 'gw2_get_account': {
+          emptySchema.parse(call.arguments);
+          const liveAccount = liveAccountSchema.parse(
+            await this.gateway.get<unknown>(apiKey, '/v2/account', {}, controller.signal)
+          );
+          return boundToolResult({
+            source: 'Live ArenaNet /v2/account normalized by the GW2 tool plus detected token permissions',
+            provenance: arenaNetProvenance('/v2/account'),
+            account: {
+              id: liveAccount.id,
+              name: liveAccount.name,
+              ...(liveAccount.world !== undefined ? { worldId: liveAccount.world } : {})
+            },
+            permissions: account.permissions,
+            selectedCharacterName: account.selectedCharacterName
+          }, 'Loaded live GW2 account');
+        }
+        case 'gw2_list_characters': {
+          emptySchema.parse(call.arguments);
+          const liveCharacters = liveCharactersSchema.parse(
+            await this.gateway.get<unknown>(apiKey, '/v2/characters', {}, controller.signal)
+          );
+          return boundToolResult({
+            source: 'Live ArenaNet /v2/characters through the existing GW2 gateway',
+            provenance: arenaNetProvenance('/v2/characters'),
+            characters: liveCharacters,
+            selectedCharacterName: account.selectedCharacterName
+          }, `Loaded ${liveCharacters.length} live characters`);
+        }
+        case 'gw2_get_character': {
+          const input = characterSchema.parse(call.arguments);
+          const data = await snapshot(input);
+          return boundToolResult({
+            source: 'Normalized GW2CC CharacterSnapshot',
+            provenance: { kind: 'arenanet_normalized', sourceName: 'GW2CC CharacterSnapshot' },
+            character: data.character,
+            eliteSpecialization: data.eliteSpecialization,
+            equipmentTemplate: data.equipmentTemplate,
+            warnings: data.warnings,
+            loadedAt: data.loadedAt
+          }, `Loaded ${data.character.name}`);
+        }
+        case 'gw2_get_character_equipment': {
+          const data = await snapshot(characterSchema.parse(call.arguments));
+          return boundToolResult({
+            source: 'Normalized GW2CC CharacterSnapshot equipment',
+            characterName: data.character.name,
+            equipmentTemplate: data.equipmentTemplate,
+            equipment: compactEquipment(data)
+          }, `Loaded equipment for ${data.character.name}`);
+        }
+        case 'gw2_get_character_build': {
+          const data = await snapshot(characterSchema.parse(call.arguments));
+          return boundToolResult({
+            source: 'Normalized GW2CC CharacterSnapshot build',
+            characterName: data.character.name,
+            build: data.build ?? null,
+            warnings: data.warnings
+          }, `Loaded build for ${data.character.name}`);
+        }
+        case 'gw2_get_character_attributes': {
+          const data = await snapshot(characterSchema.parse(call.arguments));
+          return boundToolResult({
+            source: 'GW2CC deterministic AttributeReport; baseline only',
+            characterName: data.character.name,
+            ...data.attributes
+          }, `Loaded baseline attributes for ${data.character.name}`);
+        }
+        case 'gw2_get_item': {
+          const input = itemSchema.parse(call.arguments);
+          const data = await this.gateway.get<unknown>(apiKey, `/v2/items/${input.id}`, {}, controller.signal);
+          return boundToolResult({ source: 'ArenaNet GW2 v2 item definition', provenance: arenaNetProvenance(`/v2/items/${input.id}`), item: data }, `Loaded item ${input.id}`);
+        }
+        case 'gw2_get_items': {
+          const input = itemsSchema.parse(call.arguments);
+          const data = await this.gateway.get<unknown>(apiKey, '/v2/items', { ids: input.ids }, controller.signal);
+          return boundToolResult({ source: 'ArenaNet GW2 v2 batched item definitions', provenance: arenaNetProvenance('/v2/items'), items: data }, `Loaded ${input.ids.length} items`);
+        }
+        case 'gw2_get_bank': {
+          requirePermission('Account bank', 'inventories');
+          const input = pageSchema.parse(call.arguments);
+          const slots = accountSlotsSchema.parse(await this.gateway.get<unknown>(apiKey, '/v2/account/bank', {}, controller.signal));
+          const paged = pageResult(normalizeSlots(slots), input.offset, input.limit);
+          return boundToolResult({ source: 'Live ArenaNet account bank', provenance: arenaNetProvenance('/v2/account/bank'), ...paged }, `Loaded ${paged.entries.length} bank slots`);
+        }
+        case 'gw2_get_shared_inventory': {
+          requirePermission('Shared inventory', 'inventories');
+          const input = pageSchema.parse(call.arguments);
+          const slots = accountSlotsSchema.parse(await this.gateway.get<unknown>(apiKey, '/v2/account/inventory', {}, controller.signal));
+          const paged = pageResult(normalizeSlots(slots), input.offset, input.limit);
+          return boundToolResult({ source: 'Live ArenaNet shared inventory', provenance: arenaNetProvenance('/v2/account/inventory'), ...paged }, `Loaded ${paged.entries.length} shared inventory slots`);
+        }
+        case 'gw2_get_character_inventory': {
+          requirePermission('Character inventory', 'inventories');
+          const input = characterInventorySchema.parse(call.arguments);
+          const name = resolveName(input);
+          const path = `/v2/characters/${encodeURIComponent(name)}/inventory` as `/v2/${string}`;
+          const bags = characterBagsSchema.parse(await this.gateway.get<unknown>(apiKey, path, {}, controller.signal));
+          const flattened = bags.bags.flatMap((bag, bagIndex) => bag
+            ? bag.inventory.flatMap((entry, slot) => entry ? [{ bag: bagIndex, bagId: bag.id, slot, ...entry }] : [])
+            : []);
+          const paged = pageResult(flattened, input.offset, input.limit);
+          return boundToolResult({ source: 'Live ArenaNet character inventory', provenance: arenaNetProvenance(path), characterName: name, ...paged }, `Loaded ${paged.entries.length} inventory slots for ${name}`);
+        }
+        case 'gw2_get_wallet': {
+          emptySchema.parse(call.arguments);
+          requirePermission('Account wallet', 'wallet');
+          const entries = z.array(walletSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/wallet', {}, controller.signal));
+          return boundToolResult({ source: 'Live ArenaNet account wallet', provenance: arenaNetProvenance('/v2/account/wallet'), entries }, `Loaded ${entries.length} wallet currencies`);
+        }
+        case 'gw2_get_achievements': {
+          requirePermission('Account achievements', 'progression');
+          const input = pageSchema.parse(call.arguments);
+          const entries = z.array(achievementSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/achievements', {}, controller.signal));
+          const paged = pageResult(entries, input.offset, input.limit);
+          return boundToolResult({ source: 'Live ArenaNet account achievements', provenance: arenaNetProvenance('/v2/account/achievements'), ...paged }, `Loaded ${paged.entries.length} achievement records`);
+        }
+        case 'gw2_get_materials': {
+          requirePermission('Material storage', 'inventories');
+          const input = pageSchema.parse(call.arguments);
+          const entries = z.array(materialSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/materials', {}, controller.signal));
+          const nonEmpty = entries.filter((entry) => entry.count > 0);
+          const paged = pageResult(nonEmpty, input.offset, input.limit);
+          return boundToolResult({ source: 'Live ArenaNet material storage', provenance: arenaNetProvenance('/v2/account/materials'), ...paged }, `Loaded ${paged.entries.length} material records`);
+        }
+        case 'gw2_get_v2': {
+          const input = v2Schema.parse(call.arguments);
+          if ('page' in input.query || 'page_size' in input.query) {
+            throw new Gw2ccError('VALIDATION_ERROR', 'Use the pagination object instead of page/page_size query keys.');
+          }
+          const path = input.path as `/v2/${string}`;
+          if (input.pagination.mode === 'all') {
+            const entries: unknown[] = [];
+            let pagesFetched = 0;
+            let complete = false;
+            for (let cursor = 0; cursor < input.pagination.maxPages; cursor += 1) {
+              const page = await this.gateway.get<unknown>(apiKey, path, {
+                ...input.query as Record<string, QueryValue>,
+                page: input.pagination.page + cursor,
+                page_size: input.pagination.pageSize
+              }, controller.signal);
+              if (!Array.isArray(page)) {
+                throw new Gw2ccError('VALIDATION_ERROR', 'Multi-page mode can only be used with array-returning GW2 endpoints.');
+              }
+              entries.push(...page);
+              pagesFetched += 1;
+              if (page.length < input.pagination.pageSize) {
+                complete = true;
+                break;
+              }
+            }
+            return boundToolResult({
+              source: `ArenaNet GW2 API ${input.path}`,
+              provenance: arenaNetProvenance(input.path),
+              query: input.query,
+              pagination: { ...input.pagination, pagesFetched, complete, returned: entries.length },
+              result: entries
+            }, `Loaded ${input.path} across ${pagesFetched} bounded page${pagesFetched === 1 ? '' : 's'}`);
+          }
+          const query = {
+            ...input.query as Record<string, QueryValue>,
+            ...(input.pagination.page > 0 ? { page: input.pagination.page } : {}),
+            ...(input.pagination.pageSize !== 100 ? { page_size: input.pagination.pageSize } : {})
+          };
+          const data = await this.gateway.get<unknown>(apiKey, path, query, controller.signal);
+          return boundToolResult({
+            source: `ArenaNet GW2 API ${input.path}`,
+            provenance: arenaNetProvenance(input.path),
+            query: input.query,
+            result: data
+          }, `Loaded ${input.path}`);
+        }
+        default:
+          throw new Gw2ccError('VALIDATION_ERROR', `Unknown read-only tool: ${call.name}`);
+      }
+    } catch (error) {
+      const cancelled = context.signal.aborted;
+      const payload = cancelled
+        ? { code: 'CANCELLED' as const, message: 'Tool execution was cancelled.', retryable: false }
+        : timedOut
+          ? { code: 'GW2_UPSTREAM_UNAVAILABLE' as const, message: 'The GW2 tool request timed out.', retryable: true }
+        : error instanceof z.ZodError
+          ? {
+              code: 'VALIDATION_ERROR' as const,
+              message: 'The tool arguments were invalid.',
+              retryable: false,
+              details: { issues: error.issues.slice(0, 5).map((issue) => issue.message) }
+            }
+        : toErrorPayload(error);
+      return {
+        ok: false,
+        value: { ok: false, error: payload },
+        summary: payload.message,
+        truncated: false
+      };
+    } finally {
+      clearTimeout(timeout);
+      context.signal.removeEventListener('abort', onAbort);
+    }
+  }
+}
