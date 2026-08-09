@@ -18,9 +18,11 @@ import { ElectronSecretStore } from './secret-store';
 import { createPinnedWebNetworking, type PinnedWebNetworking } from './pinned-web-fetch';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
+const applicationId = 'com.gw2cc.desktop';
 const fixtureMode = process.env.GW2CC_FIXTURE_MODE === '1';
 const e2eUserData = process.env.GW2CC_E2E_USER_DATA;
 if (e2eUserData) app.setPath('userData', e2eUserData);
+if (process.platform === 'win32') app.setAppUserModelId(applicationId);
 
 let storage: OpenSqliteResult | undefined;
 let application: Gw2ccApplication | undefined;
@@ -93,7 +95,16 @@ async function buildApplication(): Promise<Gw2ccApplication> {
   });
 }
 
+function getWindowIconPath(): string | undefined {
+  if (process.platform === 'darwin') return undefined;
+  const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'app-icons', iconName)
+    : path.resolve(currentDirectory, '../../build', iconName);
+}
+
 function createWindow(): BrowserWindow {
+  const icon = getWindowIconPath();
   const window = new BrowserWindow({
     width: 1500,
     height: 980,
@@ -102,6 +113,7 @@ function createWindow(): BrowserWindow {
     backgroundColor: '#0c1214',
     show: false,
     title: 'GW2CC — Guild Wars 2 Character Console',
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: path.join(currentDirectory, '../preload/preload.cjs'),
       contextIsolation: true,

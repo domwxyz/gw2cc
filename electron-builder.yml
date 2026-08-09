@@ -1,0 +1,32 @@
+appId: com.gw2cc.desktop
+productName: GW2CC
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**
+
+extraResources:
+  - from: build
+    to: app-icons
+    filter:
+      - icon.png
+      - icon.ico
+
+win:
+  icon: build/icon.ico
+  executableName: GW2CC
+
+mac:
+  icon: build/icon.icns
+  category: public.app-category.games
+
+linux:
+  icon: build/icons
+  category: Game
+  executableName: gw2cc
+  desktop:
+    entry:
+      StartupWMClass: com.gw2cc.desktop
