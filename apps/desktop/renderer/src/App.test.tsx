@@ -47,7 +47,7 @@ beforeEach(async () => {
     chat: {
       conversation: { id: 'conversation-1', title: 'Account-wide chat', isPinned: false, createdAt: 1, updatedAt: 1, messages: [], toolCalls: [] },
       provider: {
-        configuration: { providerId: 'fixture', model: 'fixture-gw2-assistant', toolsEnabled: true, maxTokens: 1024 },
+        configuration: { providerId: 'fixture', model: 'fixture-gw2-assistant', toolsEnabled: true, maxTokensEnabled: false, maxTokens: 1024 },
         credentialConfigured: true,
         credentialRequired: false,
         ready: true,
@@ -168,6 +168,7 @@ beforeEach(async () => {
           model: String(input.model ?? ''),
           baseUrl: String(input.baseUrl ?? 'https://openrouter.ai/api/v1'),
           toolsEnabled: Boolean(input.toolsEnabled),
+          maxTokensEnabled: Boolean(input.maxTokensEnabled),
           maxTokens: Number(input.maxTokens ?? 2048)
         },
         credentialConfigured: Boolean(input.apiKey) || current.chat.provider.credentialConfigured,
@@ -257,6 +258,15 @@ describe('Phase 1 renderer interactions', () => {
       modelId: 'fixture-gw2-assistant', createdAt: 3, status: 'streaming' as const
     };
     emitEvent({ type: 'chat.started', runId: 'run-1', conversationId: 'conversation-1', userMessage, assistantMessage });
+    emitEvent({
+      type: 'chat.reasoningDelta', runId: 'run-1', messageId: 'chat-assistant-1',
+      delta: 'Checking the character snapshot before answering.', truncated: false
+    });
+    const reasoningTrace = (await screen.findByText('Reasoning trace')).closest('details');
+    expect(reasoningTrace).not.toBeNull();
+    expect(reasoningTrace).not.toHaveAttribute('open');
+    await user.click(within(reasoningTrace as HTMLElement).getByText('Reasoning trace'));
+    expect(within(reasoningTrace as HTMLElement).getByText('Checking the character snapshot before answering.')).toBeVisible();
     emitEvent({ type: 'chat.textDelta', runId: 'run-1', messageId: 'chat-assistant-1', delta: 'Checking live data. ' });
     emitEvent({
       type: 'chat.toolStarted', runId: 'run-1', messageId: 'chat-assistant-1',
@@ -284,7 +294,10 @@ describe('Phase 1 renderer interactions', () => {
     await waitFor(() => expect(requestMock).toHaveBeenCalledWith('chat.cancel', { runId: 'run-1' }));
     emitEvent({
       type: 'chat.cancelled', runId: 'run-1',
-      message: { ...assistantMessage, content: 'Checking live data. ', status: 'cancelled' }
+      message: {
+        ...assistantMessage, content: 'Checking live data. ', status: 'cancelled',
+        reasoningTrace: { content: 'Checking the character snapshot before answering.', finishReason: 'cancelled' }
+      }
     });
     expect(await screen.findByText('Stopped')).toBeInTheDocument();
 
@@ -294,7 +307,10 @@ describe('Phase 1 renderer interactions', () => {
         ...second.chat,
         conversation: {
           ...second.chat.conversation,
-          messages: [userMessage, { ...assistantMessage, content: 'Checking live data. ', status: 'cancelled' }],
+          messages: [{ ...userMessage }, {
+            ...assistantMessage, content: 'Checking live data. ', status: 'cancelled',
+            reasoningTrace: { content: 'Checking the character snapshot before answering.', finishReason: 'cancelled' }
+          }],
           toolCalls: [{
             id: 'tool-1', messageId: 'chat-assistant-1', toolName: 'gw2_get_character_attributes',
             arguments: {}, status: 'running', startedAt: 4
@@ -439,7 +455,7 @@ describe('Phase 1 renderer interactions', () => {
       chat: {
         ...first.chat,
         provider: {
-          configuration: { providerId: 'openrouter', model: '', baseUrl: 'https://openrouter.ai/api/v1', toolsEnabled: true, maxTokens: 2048 },
+          configuration: { providerId: 'openrouter', model: '', baseUrl: 'https://openrouter.ai/api/v1', toolsEnabled: true, maxTokensEnabled: false, maxTokens: 2048 },
           credentialConfigured: false,
           credentialRequired: true,
           ready: false,
@@ -452,6 +468,8 @@ describe('Phase 1 renderer interactions', () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
+    expect(screen.getByLabelText('Limit output tokens')).not.toBeChecked();
+    expect(screen.getByLabelText('Maximum output tokens')).toBeDisabled();
     await user.type(screen.getByLabelText('Provider API key'), 'one-way-provider-secret');
     await user.click(screen.getByRole('button', { name: 'Connect & discover' }));
 
@@ -461,12 +479,14 @@ describe('Phase 1 renderer interactions', () => {
     expect(screen.queryByDisplayValue('one-way-provider-secret')).not.toBeInTheDocument();
     expect(requestMock).toHaveBeenCalledWith('provider.models', {});
     expect(requestMock).toHaveBeenCalledWith('provider.settings.update', expect.objectContaining({
-      providerId: 'openrouter', model: 'alpha/model'
+      providerId: 'openrouter', model: 'alpha/model', maxTokensEnabled: false
     }));
 
+    await user.click(screen.getByLabelText('Limit output tokens'));
+    expect(screen.getByLabelText('Maximum output tokens')).toBeEnabled();
     await user.selectOptions(model, 'beta/model');
     await waitFor(() => expect(requestMock).toHaveBeenCalledWith('provider.settings.update', expect.objectContaining({
-      providerId: 'openrouter', model: 'beta/model'
+      providerId: 'openrouter', model: 'beta/model', maxTokensEnabled: true
     })));
   });
 });

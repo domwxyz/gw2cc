@@ -100,6 +100,15 @@ describe('transport-neutral protocol validation', () => {
       await expect(terminal).resolves.toContain('fixture-backed live ArenaNet account data');
       const conversation = await harness.client.request('conversations.get', {});
       expect(conversation.messages).toHaveLength(2);
+      expect(conversation.messages[1]).toMatchObject({
+        reasoningTrace: {
+          content: expect.stringContaining('fixture tool provenance'),
+          inputTokens: 240,
+          outputTokens: 72,
+          reasoningTokens: 14,
+          finishReason: 'stop'
+        }
+      });
       expect(conversation.toolCalls.map((call) => call.toolName)).toEqual([
         'gw2_get_bank', 'gw2_wiki_search', 'fetch_url'
       ]);

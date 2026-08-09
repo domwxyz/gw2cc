@@ -33,9 +33,10 @@ import type { CharacterService, ContextService } from './services';
 
 const PROVIDER_CONFIGURATION_KEY = 'llm-provider-configuration';
 const ACTIVE_CONVERSATION_KEY = 'active-conversation-id';
-const MAX_TOOL_ROUNDS = 4;
-const MAX_TOOL_CALLS_PER_ROUND = 6;
+const MAX_CONSECUTIVE_IDENTICAL_TOOL_ROUNDS = 3;
+const MAX_REASONING_TRACE_CHARS = 262_144;
 const DEFAULT_CONVERSATION_TITLES = new Set(['Account-wide chat', 'New conversation']);
+const TOKEN_LIMIT_FINISH_REASONS = new Set(['length', 'max_tokens', 'max_output_tokens']);
 
 function titleFromFirstMessage(content: string): string {
   const normalized = content
@@ -54,6 +55,9 @@ function normalizeProviderEvent(value: unknown): import('./chat-domain').LlmEven
   if (event.type === 'text_delta' && typeof event.delta === 'string' && event.delta.length <= 65_536) {
     return { type: 'text_delta', delta: event.delta };
   }
+  if (event.type === 'reasoning_delta' && typeof event.delta === 'string' && event.delta.length <= 65_536) {
+    return { type: 'reasoning_delta', delta: event.delta };
+  }
   if (event.type === 'tool_call' && event.call && typeof event.call === 'object') {
     const call = event.call as Record<string, unknown>;
     if (typeof call.id === 'string' && call.id.length <= 500 &&
@@ -63,9 +67,18 @@ function normalizeProviderEvent(value: unknown): import('./chat-domain').LlmEven
     }
   }
   if (event.type === 'usage') {
-    const inputTokens = typeof event.inputTokens === 'number' && Number.isFinite(event.inputTokens) ? event.inputTokens : undefined;
-    const outputTokens = typeof event.outputTokens === 'number' && Number.isFinite(event.outputTokens) ? event.outputTokens : undefined;
-    return { type: 'usage', ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) };
+    const tokenCount = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0
+      ? Math.floor(candidate)
+      : undefined;
+    const inputTokens = tokenCount(event.inputTokens);
+    const outputTokens = tokenCount(event.outputTokens);
+    const reasoningTokens = tokenCount(event.reasoningTokens);
+    return {
+      type: 'usage',
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(reasoningTokens !== undefined ? { reasoningTokens } : {})
+    };
   }
   if (event.type === 'completed' && (event.finishReason === undefined || typeof event.finishReason === 'string')) {
     return { type: 'completed', ...(typeof event.finishReason === 'string' ? { finishReason: event.finishReason.slice(0, 200) } : {}) };
@@ -135,6 +148,7 @@ function normalizeConfiguration(value: unknown, fixtureMode: boolean): ProviderC
       providerId: 'fixture',
       model: 'fixture-gw2-assistant',
       toolsEnabled: true,
+      maxTokensEnabled: false,
       maxTokens: 1024
     };
   }
@@ -151,6 +165,7 @@ function normalizeConfiguration(value: unknown, fixtureMode: boolean): ProviderC
         : DEFAULT_BASE_URLS[providerId]
     ),
     toolsEnabled: candidate.toolsEnabled !== false,
+    maxTokensEnabled: candidate.maxTokensEnabled === true,
     maxTokens: typeof candidate.maxTokens === 'number'
       ? Math.min(16_384, Math.max(128, Math.round(candidate.maxTokens)))
       : 2048,
@@ -199,6 +214,7 @@ export class ProviderSettingsService {
       model: input.model,
       baseUrl: input.baseUrl?.trim() || DEFAULT_BASE_URLS[providerId],
       toolsEnabled: input.toolsEnabled,
+      maxTokensEnabled: input.maxTokensEnabled,
       maxTokens: input.maxTokens,
       temperature: input.temperature
     }, false);
@@ -564,15 +580,26 @@ export class ChatService {
   }): Promise<void> {
     let assistant = input.assistantMessage;
     const messages = [...input.messages];
+    let totalInputTokens: number | undefined;
+    let totalOutputTokens: number | undefined;
+    let totalReasoningTokens: number | undefined;
+    let previousToolRoundSignature: string | undefined;
+    let identicalToolRoundCount = 0;
     try {
-      for (let round = 0; ; round += 1) {
+      for (;;) {
         const toolCalls: import('./chat-domain').LlmToolCall[] = [];
         let roundText = '';
+        let roundReasoning = '';
+        let roundInputTokens: number | undefined;
+        let roundOutputTokens: number | undefined;
+        let roundReasoningTokens: number | undefined;
+        let roundFinishReason: string | undefined;
+        let reasoningStarted = false;
         const request = {
           model: input.configuration.model,
           messages,
           tools: input.configuration.toolsEnabled ? [...this.tools.definitions()] : [],
-          maxTokens: input.configuration.maxTokens,
+          ...(input.configuration.maxTokensEnabled ? { maxTokens: input.configuration.maxTokens } : {}),
           ...(input.configuration.temperature !== undefined ? { temperature: input.configuration.temperature } : {})
         };
         for await (const rawEvent of input.provider.stream(request, input.configuration, input.controller.signal)) {
@@ -583,25 +610,114 @@ export class ChatService {
             assistant = { ...assistant, content: assistant.content + event.delta };
             await this.repository.updateMessage(assistant);
             this.emit({ type: 'chat.textDelta', runId: input.runId, messageId: assistant.id, delta: event.delta });
+          } else if (event.type === 'reasoning_delta' && event.delta) {
+            roundReasoning = `${roundReasoning}${event.delta}`.slice(0, MAX_REASONING_TRACE_CHARS);
+            const previousTrace = assistant.reasoningTrace ?? { content: '' };
+            const separator = !reasoningStarted && previousTrace.content ? '\n\n' : '';
+            reasoningStarted = true;
+            const candidate = `${separator}${event.delta}`;
+            const remaining = Math.max(0, MAX_REASONING_TRACE_CHARS - previousTrace.content.length);
+            const accepted = candidate.slice(0, remaining);
+            const truncated = previousTrace.truncated === true || accepted.length < candidate.length;
+            assistant = {
+              ...assistant,
+              reasoningTrace: {
+                ...previousTrace,
+                content: previousTrace.content + accepted,
+                ...(truncated ? { truncated: true } : {})
+              }
+            };
+            await this.repository.updateMessage(assistant);
+            if (accepted || truncated !== previousTrace.truncated) {
+              this.emit({
+                type: 'chat.reasoningDelta',
+                runId: input.runId,
+                messageId: assistant.id,
+                delta: accepted,
+                truncated
+              });
+            }
           } else if (event.type === 'tool_call') {
             toolCalls.push(event.call);
+          } else if (event.type === 'usage') {
+            if (event.inputTokens !== undefined) roundInputTokens = event.inputTokens;
+            if (event.outputTokens !== undefined) roundOutputTokens = event.outputTokens;
+            if (event.reasoningTokens !== undefined) roundReasoningTokens = event.reasoningTokens;
+          } else if (event.type === 'completed') {
+            roundFinishReason = event.finishReason;
           }
         }
 
-        if (toolCalls.length === 0) break;
+        if (roundInputTokens !== undefined) totalInputTokens = (totalInputTokens ?? 0) + roundInputTokens;
+        if (roundOutputTokens !== undefined) totalOutputTokens = (totalOutputTokens ?? 0) + roundOutputTokens;
+        if (roundReasoningTokens !== undefined) {
+          totalReasoningTokens = (totalReasoningTokens ?? 0) + roundReasoningTokens;
+        }
+        const previousTrace = assistant.reasoningTrace;
+        if (previousTrace || totalInputTokens !== undefined || totalOutputTokens !== undefined ||
+            totalReasoningTokens !== undefined || roundFinishReason !== undefined) {
+          assistant = {
+            ...assistant,
+            reasoningTrace: {
+              content: previousTrace?.content ?? '',
+              ...(totalInputTokens !== undefined ? { inputTokens: totalInputTokens } : {}),
+              ...(totalOutputTokens !== undefined ? { outputTokens: totalOutputTokens } : {}),
+              ...(totalReasoningTokens !== undefined ? { reasoningTokens: totalReasoningTokens } : {}),
+              ...(roundFinishReason !== undefined ? { finishReason: roundFinishReason } : {}),
+              ...(previousTrace?.truncated ? { truncated: true } : {})
+            }
+          };
+          await this.repository.updateMessage(assistant);
+        }
+
+        if (toolCalls.length === 0) {
+          const details = {
+            ...(roundFinishReason ? { finishReason: roundFinishReason } : {}),
+            ...(totalInputTokens !== undefined ? { inputTokens: totalInputTokens } : {}),
+            ...(totalOutputTokens !== undefined ? { outputTokens: totalOutputTokens } : {}),
+            ...(totalReasoningTokens !== undefined ? { reasoningTokens: totalReasoningTokens } : {})
+          };
+          if (roundFinishReason && TOKEN_LIMIT_FINISH_REASONS.has(roundFinishReason.toLowerCase())) {
+            throw new Gw2ccError(
+              'LLM_UPSTREAM_ERROR',
+              input.configuration.maxTokensEnabled
+                ? 'The model reached the configured output-token limit before completing a final answer. Increase or disable the output limit, or use a smaller reasoning budget.'
+                : 'The provider or model reached its own output limit before completing a final answer.',
+              { retryable: true, details }
+            );
+          }
+          if (!roundText.trim()) {
+            throw new Gw2ccError(
+              'LLM_UPSTREAM_ERROR',
+              `The model finished without producing a final assistant answer${roundFinishReason ? ` (${roundFinishReason})` : ''}.`,
+              { retryable: true, details }
+            );
+          }
+          break;
+        }
         if (!input.configuration.toolsEnabled) {
           throw new Gw2ccError('LLM_TOOLS_UNSUPPORTED', 'The selected model attempted a tool call while tools were disabled.');
         }
-        if (round >= MAX_TOOL_ROUNDS) {
-          throw new Gw2ccError('LLM_UPSTREAM_ERROR', `The model exceeded the ${MAX_TOOL_ROUNDS}-round GW2 tool limit.`);
-        }
-        if (toolCalls.length > MAX_TOOL_CALLS_PER_ROUND) {
+        const toolRoundSignature = JSON.stringify(toolCalls.map((call) => ({
+          name: call.name,
+          arguments: redactSensitive(call.arguments)
+        })));
+        identicalToolRoundCount = toolRoundSignature === previousToolRoundSignature
+          ? identicalToolRoundCount + 1
+          : 1;
+        previousToolRoundSignature = toolRoundSignature;
+        if (identicalToolRoundCount >= MAX_CONSECUTIVE_IDENTICAL_TOOL_ROUNDS) {
           throw new Gw2ccError(
             'LLM_UPSTREAM_ERROR',
-            `The model requested more than ${MAX_TOOL_CALLS_PER_ROUND} tools in one round.`
+            'The model repeated the same GW2 tool request without making progress. Try again or refine the request.'
           );
         }
-        messages.push({ role: 'assistant', content: roundText, toolCalls });
+        messages.push({
+          role: 'assistant',
+          content: roundText,
+          ...(roundReasoning ? { reasoning: roundReasoning } : {}),
+          toolCalls
+        });
         for (const call of toolCalls) {
           const persisted: PersistedToolCall = {
             id: this.createId(),

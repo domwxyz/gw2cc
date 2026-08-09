@@ -15,6 +15,7 @@ export interface ProviderConfiguration {
   model: string;
   baseUrl?: string;
   toolsEnabled: boolean;
+  maxTokensEnabled: boolean;
   maxTokens: number;
   temperature?: number;
 }
@@ -24,6 +25,7 @@ export interface ProviderConfigurationInput {
   model: string;
   baseUrl?: string;
   toolsEnabled: boolean;
+  maxTokensEnabled?: boolean;
   maxTokens?: number;
   temperature?: number;
   apiKey?: string;
@@ -78,6 +80,8 @@ export interface LlmToolCall {
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Provider-supplied visible reasoning used only to continue the active tool round. */
+  reasoning?: string;
   toolCalls?: LlmToolCall[];
   toolCallId?: string;
   toolName?: string;
@@ -87,14 +91,15 @@ export interface LlmRequest {
   model: string;
   messages: LlmMessage[];
   tools: LlmToolDefinition[];
-  maxTokens: number;
+  maxTokens?: number;
   temperature?: number;
 }
 
 export type LlmEvent =
   | { type: 'text_delta'; delta: string }
+  | { type: 'reasoning_delta'; delta: string }
   | { type: 'tool_call'; call: LlmToolCall }
-  | { type: 'usage'; inputTokens?: number; outputTokens?: number }
+  | { type: 'usage'; inputTokens?: number; outputTokens?: number; reasoningTokens?: number }
   | { type: 'completed'; finishReason?: string };
 
 export interface ConversationSummary {
@@ -107,6 +112,16 @@ export interface ConversationSummary {
 
 export type ConversationMessageStatus = 'streaming' | 'complete' | 'failed' | 'cancelled';
 
+export interface ReasoningTrace {
+  /** Visible text explicitly returned by the provider; it may be raw, summarized, or omitted. */
+  content: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  finishReason?: string;
+  truncated?: boolean;
+}
+
 export interface ConversationMessage {
   id: string;
   conversationId: string;
@@ -117,6 +132,7 @@ export interface ConversationMessage {
   modelId?: string;
   createdAt: number;
   status: ConversationMessageStatus;
+  reasoningTrace?: ReasoningTrace;
   error?: Gw2ccErrorPayload;
 }
 
@@ -160,6 +176,13 @@ export type Gw2ccEvent =
       assistantMessage: ConversationMessage;
     }
   | { type: 'chat.textDelta'; runId: string; messageId: string; delta: string }
+  | {
+      type: 'chat.reasoningDelta';
+      runId: string;
+      messageId: string;
+      delta: string;
+      truncated: boolean;
+    }
   | {
       type: 'chat.toolStarted';
       runId: string;

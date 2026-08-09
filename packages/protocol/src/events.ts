@@ -17,6 +17,13 @@ export const gw2ccEventSchema = z.discriminatedUnion('type', [
     delta: z.string()
   }),
   z.object({
+    type: z.literal('chat.reasoningDelta'),
+    runId: z.string(),
+    messageId: z.string(),
+    delta: z.string(),
+    truncated: z.boolean()
+  }),
+  z.object({
     type: z.literal('chat.toolStarted'),
     runId: z.string(),
     messageId: z.string(),

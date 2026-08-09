@@ -147,6 +147,7 @@ export const providerConfigurationSchema = z.object({
   model: z.string(),
   baseUrl: z.string().optional(),
   toolsEnabled: z.boolean(),
+  maxTokensEnabled: z.boolean(),
   maxTokens: z.number().int(),
   temperature: z.number().optional()
 });
@@ -169,6 +170,15 @@ export const researchSettingsSchema = z.object({
   message: z.string()
 });
 
+export const reasoningTraceSchema = z.object({
+  content: z.string(),
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  reasoningTokens: z.number().int().nonnegative().optional(),
+  finishReason: z.string().optional(),
+  truncated: z.boolean().optional()
+});
+
 export const conversationMessageSchema = z.object({
   id: z.string(),
   conversationId: z.string(),
@@ -179,6 +189,7 @@ export const conversationMessageSchema = z.object({
   modelId: z.string().optional(),
   createdAt: z.number(),
   status: z.enum(['streaming', 'complete', 'failed', 'cancelled']),
+  reasoningTrace: reasoningTraceSchema.optional(),
   error: errorSchema.optional()
 });
 

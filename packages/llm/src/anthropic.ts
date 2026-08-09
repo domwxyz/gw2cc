@@ -17,6 +17,8 @@ import {
   readSseData
 } from './streaming';
 
+const DEFAULT_ANTHROPIC_MAX_TOKENS = 16_384;
+
 function anthropicHeaders(apiKey?: string): Record<string, string> {
   if (!apiKey) throw new Gw2ccError('LLM_KEY_MISSING', 'An Anthropic API key is required.');
   return {
@@ -77,9 +79,8 @@ export class AnthropicProvider implements LlmProvider {
     return payload.data.flatMap((entry) => {
       if (!entry || typeof entry !== 'object') return [];
       const model = entry as { id?: unknown; display_name?: unknown };
-      return typeof model.id === 'string'
-        ? [{ id: model.id, ...(typeof model.display_name === 'string' ? { name: model.display_name } : {}) }]
-        : [];
+      if (typeof model.id !== 'string') return [];
+      return [{ id: model.id, ...(typeof model.display_name === 'string' ? { name: model.display_name } : {}) }];
     });
   }
 
@@ -89,6 +90,7 @@ export class AnthropicProvider implements LlmProvider {
     signal: AbortSignal
   ): AsyncIterable<LlmEvent> {
     const normalized = toAnthropicMessages(request.messages);
+    const maxTokens = request.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS;
     const response = await fetchProvider(this.fetchImpl, joinUrl(this.baseUrl, 'messages'), {
       method: 'POST',
       headers: anthropicHeaders(configuration.apiKey),
@@ -97,7 +99,7 @@ export class AnthropicProvider implements LlmProvider {
         model: request.model,
         system: normalized.system,
         messages: normalized.messages,
-        max_tokens: request.maxTokens,
+        max_tokens: maxTokens,
         stream: true,
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
         ...(request.tools.length > 0
@@ -122,7 +124,17 @@ export class AnthropicProvider implements LlmProvider {
         throw providerStreamError();
       }
       if (event?.type === 'error') throw new Gw2ccError('LLM_UPSTREAM_ERROR', 'Anthropic reported an error while streaming.', { retryable: true });
-      if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+      if (event?.type === 'message_start' && event.message?.usage) {
+        const usage = event.message.usage;
+        yield {
+          type: 'usage',
+          ...(typeof usage.input_tokens === 'number' ? { inputTokens: usage.input_tokens } : {}),
+          ...(typeof usage.output_tokens === 'number' ? { outputTokens: usage.output_tokens } : {}),
+          ...(typeof usage.output_tokens_details?.thinking_tokens === 'number'
+            ? { reasoningTokens: usage.output_tokens_details.thinking_tokens }
+            : {})
+        };
+      } else if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
         toolBlocks.set(event.index, {
           id: String(event.content_block.id ?? `anthropic-tool-${event.index}`),
           name: String(event.content_block.name ?? ''),
@@ -130,6 +142,10 @@ export class AnthropicProvider implements LlmProvider {
         });
       } else if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
         if (typeof event.delta.text === 'string' && event.delta.text) yield { type: 'text_delta', delta: event.delta.text };
+      } else if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
+        if (typeof event.delta.thinking === 'string' && event.delta.thinking) {
+          yield { type: 'reasoning_delta', delta: event.delta.thinking };
+        }
       } else if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
         const block = toolBlocks.get(event.index);
         if (block && typeof event.delta.partial_json === 'string') block.arguments += event.delta.partial_json;
@@ -138,7 +154,10 @@ export class AnthropicProvider implements LlmProvider {
         yield {
           type: 'usage',
           ...(typeof event.usage?.input_tokens === 'number' ? { inputTokens: event.usage.input_tokens } : {}),
-          ...(typeof event.usage?.output_tokens === 'number' ? { outputTokens: event.usage.output_tokens } : {})
+          ...(typeof event.usage?.output_tokens === 'number' ? { outputTokens: event.usage.output_tokens } : {}),
+          ...(typeof event.usage?.output_tokens_details?.thinking_tokens === 'number'
+            ? { reasoningTokens: event.usage.output_tokens_details.thinking_tokens }
+            : {})
         };
       }
     }

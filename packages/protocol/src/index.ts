@@ -15,5 +15,6 @@ export type {
   PersistedToolCall,
   ProviderSettingsView,
   ProviderTestResult,
+  ReasoningTrace,
   SkillSelection
 } from '@gw2cc/core';

@@ -15,7 +15,9 @@ import {
 import { z } from 'zod';
 import { boundToolResult } from './results';
 
-const TOOL_TIMEOUT_MS = 15_000;
+const TOOL_TIMEOUT_MS = 75_000;
+const GENERIC_PAGE_SIZE = 25;
+const GENERIC_ID_BATCH_SIZE = 25;
 
 const emptySchema = z.object({}).strict();
 const characterSchema = z.object({ name: z.string().trim().min(1).max(128).optional() }).strict();
@@ -48,9 +50,9 @@ const v2Schema = z.object({
   pagination: z.object({
     mode: z.enum(['single', 'all']).default('single'),
     page: z.number().int().min(0).max(100_000).default(0),
-    pageSize: z.number().int().min(1).max(200).default(100),
+    pageSize: z.number().int().min(1).max(200).default(GENERIC_PAGE_SIZE),
     maxPages: z.number().int().min(1).max(5).default(3)
-  }).strict().default({ mode: 'single', page: 0, pageSize: 100, maxPages: 3 })
+  }).strict().default({ mode: 'single', page: 0, pageSize: GENERIC_PAGE_SIZE, maxPages: 3 })
 }).strict();
 const liveAccountSchema = z.object({
   id: z.string(),
@@ -192,7 +194,7 @@ const DEFINITIONS: readonly LlmToolDefinition[] = [
   },
   {
     name: 'gw2_get_v2',
-    description: 'Perform a bounded authenticated GET against the fixed ArenaNet host for a clean /v2/ path. No arbitrary hosts, methods, headers, or credentials are accepted.',
+    description: 'Perform a bounded authenticated GET against the fixed ArenaNet host for a clean /v2/ path. Rich resources default to 25 records per page, ids arrays are transparently batched to 25, and every partial response reports how to continue. Omit query and pagination to get an endpoint catalog ID list. No arbitrary hosts, methods, headers, or credentials are accepted.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -213,7 +215,7 @@ const DEFINITIONS: readonly LlmToolDefinition[] = [
           properties: {
             mode: { type: 'string', enum: ['single', 'all'], default: 'single' },
             page: { type: 'integer', minimum: 0, maximum: 100000, default: 0 },
-            pageSize: { type: 'integer', minimum: 1, maximum: 200, default: 100 },
+            pageSize: { type: 'integer', minimum: 1, maximum: 200, default: GENERIC_PAGE_SIZE },
             maxPages: { type: 'integer', minimum: 1, maximum: 5, default: 3 }
           }
         }
@@ -440,18 +442,61 @@ export class Gw2ToolExecutor implements ToolExecutor {
           return boundToolResult({ source: 'Live ArenaNet material storage', provenance: arenaNetProvenance('/v2/account/materials'), ...paged }, `Loaded ${paged.entries.length} material records`);
         }
         case 'gw2_get_v2': {
+          const paginationWasRequested = Boolean(
+            call.arguments &&
+            typeof call.arguments === 'object' &&
+            !Array.isArray(call.arguments) &&
+            Object.prototype.hasOwnProperty.call(call.arguments, 'pagination')
+          );
           const input = v2Schema.parse(call.arguments);
           if ('page' in input.query || 'page_size' in input.query) {
             throw new Gw2ccError('VALIDATION_ERROR', 'Use the pagination object instead of page/page_size query keys.');
           }
           const path = input.path as `/v2/${string}`;
+          const requestedIds = Array.isArray(input.query.ids) ? input.query.ids : undefined;
+          const requestedAllIds = input.query.ids === 'all';
+          const effectiveQuery = { ...input.query } as Record<string, QueryValue>;
+          if (requestedAllIds) delete effectiveQuery.ids;
+          if (requestedIds) {
+            const batchSize = Math.min(input.pagination.pageSize, GENERIC_ID_BATCH_SIZE);
+            const batchPage = paginationWasRequested ? input.pagination.page : 0;
+            const batchOffset = batchPage * batchSize;
+            const executedIds = requestedIds.slice(batchOffset, batchOffset + batchSize);
+            effectiveQuery.ids = executedIds;
+            const remainingIds = requestedIds.slice(batchOffset + executedIds.length);
+            const data = executedIds.length > 0
+              ? await this.gateway.get<unknown>(apiKey, path, effectiveQuery, controller.signal)
+              : [];
+            const outcome = boundToolResult({
+              source: `ArenaNet GW2 API ${input.path}`,
+              provenance: arenaNetProvenance(input.path),
+              query: effectiveQuery,
+              batching: {
+                requested: requestedIds.length,
+                executed: executedIds.length,
+                batchPage,
+                batchSize,
+                skippedBefore: batchOffset,
+                remainingIds,
+                hasMore: remainingIds.length > 0,
+                nextBatchPage: remainingIds.length > 0 ? batchPage + 1 : undefined
+              },
+              result: data
+            }, `Loaded ${input.path} for ${executedIds.length} explicitly requested ID${executedIds.length === 1 ? '' : 's'}`);
+            return outcome.truncated
+              ? {
+                  ...outcome,
+                  summary: `${outcome.summary}. Retry these IDs in a smaller batch before continuing with remainingIds.`
+                }
+              : outcome;
+          }
           if (input.pagination.mode === 'all') {
             const entries: unknown[] = [];
             let pagesFetched = 0;
             let complete = false;
             for (let cursor = 0; cursor < input.pagination.maxPages; cursor += 1) {
               const page = await this.gateway.get<unknown>(apiKey, path, {
-                ...input.query as Record<string, QueryValue>,
+                ...effectiveQuery,
                 page: input.pagination.page + cursor,
                 page_size: input.pagination.pageSize
               }, controller.signal);
@@ -465,26 +510,66 @@ export class Gw2ToolExecutor implements ToolExecutor {
                 break;
               }
             }
-            return boundToolResult({
+            const outcome = boundToolResult({
               source: `ArenaNet GW2 API ${input.path}`,
               provenance: arenaNetProvenance(input.path),
-              query: input.query,
-              pagination: { ...input.pagination, pagesFetched, complete, returned: entries.length },
+              query: effectiveQuery,
+              pagination: {
+                ...input.pagination,
+                pagesFetched,
+                complete,
+                returned: entries.length,
+                nextPage: complete ? undefined : input.pagination.page + pagesFetched
+              },
               result: entries
             }, `Loaded ${input.path} across ${pagesFetched} bounded page${pagesFetched === 1 ? '' : 's'}`);
+            return outcome.truncated
+              ? {
+                  ...outcome,
+                  summary: `${outcome.summary}. Use single-page mode with a smaller pageSize so no records are skipped.`
+                }
+              : outcome;
           }
+          const shouldPaginate = paginationWasRequested || requestedAllIds;
           const query = {
-            ...input.query as Record<string, QueryValue>,
-            ...(input.pagination.page > 0 ? { page: input.pagination.page } : {}),
-            ...(input.pagination.pageSize !== 100 ? { page_size: input.pagination.pageSize } : {})
+            ...effectiveQuery,
+            ...(shouldPaginate ? {
+              page: input.pagination.page,
+              page_size: input.pagination.pageSize
+            } : {})
           };
           const data = await this.gateway.get<unknown>(apiKey, path, query, controller.signal);
-          return boundToolResult({
+          if (shouldPaginate && !Array.isArray(data)) {
+            throw new Gw2ccError('VALIDATION_ERROR', 'Pagination can only be used with array-returning GW2 endpoints.');
+          }
+          const outcome = boundToolResult({
             source: `ArenaNet GW2 API ${input.path}`,
             provenance: arenaNetProvenance(input.path),
-            query: input.query,
+            query,
+            ...(shouldPaginate ? {
+              pagination: {
+                mode: 'single',
+                page: input.pagination.page,
+                pageSize: input.pagination.pageSize,
+                returned: (data as unknown[]).length,
+                reachedEnd: (data as unknown[]).length < input.pagination.pageSize,
+                nextPage: (data as unknown[]).length < input.pagination.pageSize
+                  ? undefined
+                  : input.pagination.page + 1,
+                ...(requestedAllIds ? { translatedFromIdsAll: true } : {}),
+                retrySamePageWithPageSize: Math.max(1, Math.floor(input.pagination.pageSize / 2))
+              }
+            } : {}),
             result: data
-          }, `Loaded ${input.path}`);
+          }, shouldPaginate
+            ? `Loaded ${input.path} page ${input.pagination.page} with ${input.pagination.pageSize} records requested`
+            : `Loaded ${input.path}`);
+          return outcome.truncated && shouldPaginate
+            ? {
+                ...outcome,
+                summary: `${outcome.summary}. Retry page ${input.pagination.page} with pageSize ${Math.max(1, Math.floor(input.pagination.pageSize / 2))} before advancing.`
+              }
+            : outcome;
         }
         default:
           throw new Gw2ccError('VALIDATION_ERROR', `Unknown read-only tool: ${call.name}`);

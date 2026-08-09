@@ -61,6 +61,12 @@ test('fixture-mode desktop workflow performs mixed research and persists charact
     const assistantAnswer = window.locator('.message-row-assistant').filter({ hasText: 'fixture-backed live ArenaNet account data' });
     await expect(assistantAnswer).toBeVisible();
     await expect(assistantAnswer).toContainText('untrusted external research');
+    const reasoningTrace = assistantAnswer.locator('.reasoning-trace');
+    await expect(reasoningTrace).toBeVisible();
+    await expect(reasoningTrace).not.toHaveAttribute('open', '');
+    await reasoningTrace.locator('summary').click();
+    await expect(reasoningTrace.getByText(/fixture tool provenance/)).toBeVisible();
+    await expect(reasoningTrace).toContainText('14 reasoning tokens');
     await expect.poll(() => window.evaluate(() => ({
       horizontal: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       vertical: document.documentElement.scrollHeight - document.documentElement.clientHeight
@@ -81,6 +87,7 @@ test('fixture-mode desktop workflow performs mixed research and persists charact
     await conversationRail.getByRole('button', { name: 'Clear conversation search' }).click();
     await conversationRail.locator('.conversation-entry').filter({ hasText: /Research what is in my bank/ }).locator('.conversation-select').click();
     await expect(window.getByText(/fixture-backed live ArenaNet account data/)).toBeVisible();
+    await expect(window.locator('.reasoning-trace').filter({ hasText: '14 reasoning tokens' })).toBeVisible();
     await expect(window.getByRole('banner').first().getByText('gw2cc', { exact: true })).toBeVisible();
     await expect(window.getByRole('combobox', { name: 'Character' })).toBeVisible();
     await expect(window.getByRole('button', { name: 'Settings' })).toBeVisible();

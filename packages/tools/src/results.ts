@@ -2,11 +2,22 @@ import { redactSensitive, type ToolExecutionOutcome } from '@gw2cc/core';
 
 const DEFAULT_MAX_RESULT_BYTES = 48_000;
 
-function compact(value: unknown, depth = 0): unknown {
-  if (depth > 8) return '[TRUNCATED_DEPTH]';
-  if (typeof value === 'string') return value.length > 2_000 ? `${value.slice(0, 2_000)}…` : value;
+interface CompactLimits {
+  arrayEntries: number;
+  objectEntries: number;
+  stringCharacters: number;
+  depth: number;
+}
+
+function compact(value: unknown, limits: CompactLimits, depth = 0): unknown {
+  if (depth > limits.depth) return '[TRUNCATED_DEPTH]';
+  if (typeof value === 'string') {
+    return value.length > limits.stringCharacters
+      ? `${value.slice(0, limits.stringCharacters)}...`
+      : value;
+  }
   if (Array.isArray(value)) {
-    const entries = value.slice(0, 30).map((entry) => compact(entry, depth + 1));
+    const entries = value.slice(0, limits.arrayEntries).map((entry) => compact(entry, limits, depth + 1));
     return value.length > entries.length
       ? [...entries, { truncatedItems: value.length - entries.length }]
       : entries;
@@ -14,8 +25,8 @@ function compact(value: unknown, depth = 0): unknown {
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .slice(0, 60)
-        .map(([key, entry]) => [key, compact(entry, depth + 1)])
+        .slice(0, limits.objectEntries)
+        .map(([key, entry]) => [key, compact(entry, limits, depth + 1)])
     );
   }
   return value;
@@ -36,10 +47,16 @@ export function boundToolResult(
   if (originalBytes <= maxResultBytes) {
     return { ok: true, value: wrapped, summary, truncated: false };
   }
-  let preview = compact(safe);
-  if (byteLength(preview) > maxResultBytes - 1_000) {
-    preview = JSON.stringify(preview).slice(0, Math.max(1_000, maxResultBytes - 1_500));
-  }
+  const compactLimits: CompactLimits[] = [
+    { arrayEntries: 30, objectEntries: 60, stringCharacters: 2_000, depth: 8 },
+    { arrayEntries: 20, objectEntries: 50, stringCharacters: 1_000, depth: 7 },
+    { arrayEntries: 12, objectEntries: 40, stringCharacters: 500, depth: 6 },
+    { arrayEntries: 8, objectEntries: 30, stringCharacters: 250, depth: 5 },
+    { arrayEntries: 4, objectEntries: 20, stringCharacters: 120, depth: 4 },
+    { arrayEntries: 2, objectEntries: 12, stringCharacters: 80, depth: 3 },
+    { arrayEntries: 1, objectEntries: 8, stringCharacters: 40, depth: 2 }
+  ];
+  let preview: unknown = compact(safe, compactLimits[0]!);
   const buildValue = () => ({
     ok: true,
     data: preview,
@@ -48,11 +65,12 @@ export function boundToolResult(
       originalBytes,
       limitBytes: maxResultBytes,
       previewIsComplete: false,
-      representation: typeof preview === 'string' ? 'bounded_json_text' : 'bounded_json_value'
+      representation: 'bounded_json_value'
     }
   });
-  while (byteLength(buildValue()) > maxResultBytes && typeof preview === 'string' && preview.length > 100) {
-    preview = preview.slice(0, Math.max(100, Math.floor(preview.length * 0.75)));
+  for (const limits of compactLimits.slice(1)) {
+    if (byteLength(buildValue()) <= maxResultBytes) break;
+    preview = compact(safe, limits);
   }
   if (byteLength(buildValue()) > maxResultBytes) preview = '[Preview omitted because its encoded form exceeded the result limit.]';
   return {

@@ -146,4 +146,69 @@ describe('bounded read-only GW2 tool registry', () => {
     expect(calls).toBe(2);
     expect(paged).toMatchObject({ value: { data: { pagination: { pagesFetched: 2, complete: true, returned: 3 } } } });
   });
+
+  it('keeps catalog reads unpaged, exposes explicit page progress, and safely batches rich ID lookups', async () => {
+    const fixture = new FixtureGw2Gateway();
+    const queries: Array<Record<string, QueryValue>> = [];
+    const gateway: Gw2Gateway = {
+      fixtureMode: true,
+      validateKey: (key) => fixture.validateKey(key),
+      getCharacterSnapshot: (key, name, refresh, signal) => fixture.getCharacterSnapshot(key, name, refresh, signal),
+      get: async <T>(_key: string, _path: `/v2/${string}`, query: Record<string, QueryValue> = {}) => {
+        queries.push(query);
+        if (Array.isArray(query.ids)) return query.ids.map((id) => ({ id, name: `Quest ${id}` })) as T;
+        if ('page' in query) return [{ id: Number(query.page) * 100 + 1 }, { id: Number(query.page) * 100 + 2 }] as T;
+        return [101, 102, 103] as T;
+      }
+    };
+    const tools = executor(gateway);
+    const signal = new AbortController().signal;
+
+    const catalog = await tools.execute(
+      { id: 'catalog', name: 'gw2_get_v2', arguments: { path: '/v2/quests' } },
+      { signal }
+    );
+    expect(queries[0]).toEqual({});
+    expect(catalog).toMatchObject({ value: { data: { result: [101, 102, 103] } } });
+
+    const page = await tools.execute(
+      { id: 'page-zero', name: 'gw2_get_v2', arguments: { path: '/v2/quests', pagination: { page: 0 } } },
+      { signal }
+    );
+    expect(queries[1]).toMatchObject({ page: 0, page_size: 25 });
+    expect(page).toMatchObject({
+      value: { data: { pagination: { mode: 'single', page: 0, pageSize: 25, returned: 2, reachedEnd: true } } }
+    });
+
+    const ids = Array.from({ length: 30 }, (_, index) => index + 1);
+    const batch = await tools.execute(
+      { id: 'id-batch', name: 'gw2_get_v2', arguments: { path: '/v2/quests', query: { ids } } },
+      { signal }
+    );
+    expect(queries[2]!.ids).toEqual(ids.slice(0, 25));
+    expect(batch).toMatchObject({
+      value: { data: { batching: { requested: 30, executed: 25, batchPage: 0, remainingIds: ids.slice(25), hasMore: true } } }
+    });
+
+    const nextBatch = await tools.execute(
+      {
+        id: 'id-batch-next',
+        name: 'gw2_get_v2',
+        arguments: { path: '/v2/quests', query: { ids }, pagination: { page: 1 } }
+      },
+      { signal }
+    );
+    expect(queries[3]!.ids).toEqual(ids.slice(25));
+    expect(nextBatch).toMatchObject({
+      value: { data: { batching: { batchPage: 1, skippedBefore: 25, remainingIds: [], hasMore: false } } }
+    });
+
+    const all = await tools.execute(
+      { id: 'ids-all', name: 'gw2_get_v2', arguments: { path: '/v2/quests', query: { ids: 'all' } } },
+      { signal }
+    );
+    expect(queries[4]).toMatchObject({ page: 0, page_size: 25 });
+    expect(queries[4]).not.toHaveProperty('ids');
+    expect(all).toMatchObject({ value: { data: { pagination: { translatedFromIdsAll: true } } } });
+  });
 });

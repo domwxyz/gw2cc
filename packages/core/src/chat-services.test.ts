@@ -55,11 +55,14 @@ class ToolThenAnswerProvider implements LlmProvider {
   async *stream(request: LlmRequest): AsyncIterable<LlmEvent> {
     this.requests.push(request);
     if (!request.messages.some((message) => message.role === 'tool')) {
+      yield { type: 'reasoning_delta', delta: 'Need current character attributes.' };
       yield { type: 'tool_call', call: { id: 'tool-call-1', name: 'gw2_get_character_attributes', arguments: {} } };
       yield { type: 'completed', finishReason: 'tool_calls' };
     } else {
+      yield { type: 'reasoning_delta', delta: 'The tool result is sufficient.' };
       yield { type: 'text_delta', delta: 'Tool-backed ' };
       yield { type: 'text_delta', delta: 'answer.' };
+      yield { type: 'usage', inputTokens: 20, outputTokens: 8, reasoningTokens: 3 };
       yield { type: 'completed', finishReason: 'stop' };
     }
   }
@@ -82,16 +85,26 @@ describe('ChatService bounded orchestration', () => {
       expect(firstConversation.isPinned).toBe(false);
       expect(firstConversation.messages).toMatchObject([
         { role: 'user', focusedCharacterName: 'Aurelia Ward', content: 'Inspect my baseline.' },
-        { role: 'assistant', focusedCharacterName: 'Aurelia Ward', content: 'Tool-backed answer.', status: 'complete' }
+        {
+          role: 'assistant', focusedCharacterName: 'Aurelia Ward', content: 'Tool-backed answer.', status: 'complete',
+          reasoningTrace: {
+            content: 'Need current character attributes.\n\nThe tool result is sufficient.',
+            inputTokens: 20, outputTokens: 8, reasoningTokens: 3, finishReason: 'stop'
+          }
+        }
       ]);
       expect(firstConversation.toolCalls[0]).toMatchObject({
         toolName: 'gw2_get_character_attributes', status: 'completed'
       });
       expect(events.map((event) => event.type)).toEqual(expect.arrayContaining([
-        'chat.started', 'chat.toolStarted', 'chat.toolCompleted', 'chat.textDelta', 'chat.completed'
+        'chat.started', 'chat.reasoningDelta', 'chat.toolStarted', 'chat.toolCompleted', 'chat.textDelta', 'chat.completed'
       ]));
       expect(provider.requests).toHaveLength(2);
+      expect(provider.requests[0]).not.toHaveProperty('maxTokens');
       expect(provider.requests[1]!.messages.some((message) => message.role === 'tool')).toBe(true);
+      expect(provider.requests[1]!.messages.find((message) => message.role === 'assistant')).toMatchObject({
+        reasoning: 'Need current character attributes.'
+      });
 
       await harness.application.selectCharacter('Sylvari Ranger');
       const before = (await harness.application.conversations.getPrimary()).id;
@@ -148,7 +161,42 @@ describe('ChatService bounded orchestration', () => {
     }
   });
 
-  it('stops an endlessly tool-calling model at the configured round bound', async () => {
+  it('allows a model to complete after more than four distinct tool rounds', async () => {
+    let round = 0;
+    const provider: LlmProvider = {
+      id: 'fixture',
+      listModels: async () => [{ id: 'fixture-gw2-assistant' }],
+      async *stream() {
+        if (round < 6) {
+          round += 1;
+          yield {
+            type: 'tool_call',
+            call: { id: `progress-tool-${round}`, name: 'test_progress', arguments: { page: round } }
+          };
+        } else {
+          yield { type: 'text_delta', delta: 'Finished after six tool rounds.' };
+          yield { type: 'completed', finishReason: 'stop' };
+        }
+      }
+    };
+    const tools: ToolExecutor = {
+      definitions: () => [],
+      execute: async (call) => ({ ok: true, value: { page: call.arguments }, summary: 'progress', truncated: false })
+    };
+    const harness = createHarness(provider, tools);
+    try {
+      await harness.application.bootstrap(true);
+      const terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
+      await harness.application.chat.send('Use as many distinct tool rounds as needed.');
+      const terminal = await terminalPromise;
+      expect(terminal).toMatchObject({ type: 'chat.completed', message: { content: 'Finished after six tool rounds.' } });
+      expect((await harness.application.conversations.getPrimary()).toolCalls).toHaveLength(6);
+    } finally {
+      harness.storage.close();
+    }
+  });
+
+  it('stops a provider loop that repeats the exact same tool round without progress', async () => {
     let call = 0;
     const provider: LlmProvider = {
       id: 'fixture',
@@ -156,21 +204,25 @@ describe('ChatService bounded orchestration', () => {
       async *stream() {
         yield {
           type: 'tool_call',
-          call: { id: `loop-tool-${++call}`, name: 'gw2_get_account', arguments: {} }
+          call: { id: `loop-tool-${++call}`, name: 'test_loop', arguments: { page: 0 } }
         };
       }
     };
-    const harness = createHarness(provider);
+    const tools: ToolExecutor = {
+      definitions: () => [],
+      execute: async () => ({ ok: true, value: { page: 0 }, summary: 'same result', truncated: false })
+    };
+    const harness = createHarness(provider, tools);
     try {
       await harness.application.bootstrap(true);
       const terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
-      await harness.application.chat.send('Keep calling tools.');
+      await harness.application.chat.send('Repeat forever.');
       const terminal = await terminalPromise;
       expect(terminal).toMatchObject({
         type: 'chat.failed',
-        error: { code: 'LLM_UPSTREAM_ERROR', message: expect.stringContaining('4-round') }
+        error: { code: 'LLM_UPSTREAM_ERROR', message: expect.stringContaining('without making progress') }
       });
-      expect((await harness.application.conversations.getPrimary()).toolCalls).toHaveLength(4);
+      expect((await harness.application.conversations.getPrimary()).toolCalls).toHaveLength(2);
     } finally {
       harness.storage.close();
     }
@@ -204,6 +256,53 @@ describe('ChatService bounded orchestration', () => {
       await harness.application.chat.cancel(run.runId);
       const terminal = await terminalPromise;
       expect(terminal).toMatchObject({ type: 'chat.cancelled', message: { content: 'Partial', status: 'cancelled' } });
+    } finally {
+      harness.storage.close();
+    }
+  });
+
+  it('exposes provider reasoning and fails visibly when the token budget ends without a final answer', async () => {
+    const provider: LlmProvider = {
+      id: 'fixture',
+      listModels: async () => [{ id: 'fixture-gw2-assistant' }],
+      async *stream() {
+        yield { type: 'reasoning_delta', delta: 'I inspected the supplied context but used the remaining budget.' };
+        yield { type: 'usage', inputTokens: 80, outputTokens: 32, reasoningTokens: 32 };
+        yield { type: 'completed', finishReason: 'length' };
+      }
+    };
+    const harness = createHarness(provider);
+    try {
+      await harness.application.bootstrap(true);
+      const events: Gw2ccEvent[] = [];
+      const unsubscribe = harness.application.chat.subscribe((event) => events.push(event));
+      const terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
+      await harness.application.chat.send('Diagnose the empty turn.');
+      const terminal = await terminalPromise;
+      expect(terminal).toMatchObject({
+        type: 'chat.failed',
+        message: {
+          content: '',
+          status: 'failed',
+          reasoningTrace: {
+            content: 'I inspected the supplied context but used the remaining budget.',
+            inputTokens: 80,
+            outputTokens: 32,
+            reasoningTokens: 32,
+            finishReason: 'length'
+          }
+        },
+        error: {
+          code: 'LLM_UPSTREAM_ERROR',
+          message: expect.stringContaining('its own output limit'),
+          details: { finishReason: 'length', reasoningTokens: 32 }
+        }
+      });
+      expect(events.some((event) => event.type === 'chat.reasoningDelta')).toBe(true);
+      expect((await harness.application.conversations.getPrimary()).messages.at(-1)).toMatchObject({
+        status: 'failed', reasoningTrace: { finishReason: 'length', reasoningTokens: 32 }
+      });
+      unsubscribe();
     } finally {
       harness.storage.close();
     }

@@ -26,11 +26,12 @@ interface PendingToolCall {
   arguments: string;
 }
 
-function toOpenAiMessage(message: LlmMessage): Record<string, unknown> {
+function toOpenAiMessage(message: LlmMessage, includeReasoning: boolean): Record<string, unknown> {
   if (message.role === 'assistant') {
     return {
       role: 'assistant',
       content: message.content || null,
+      ...(includeReasoning && message.reasoning ? { reasoning: message.reasoning } : {}),
       ...(message.toolCalls?.length
         ? {
             tool_calls: message.toolCalls.map((call) => ({
@@ -50,6 +51,20 @@ function toOpenAiMessage(message: LlmMessage): Record<string, unknown> {
     };
   }
   return { role: message.role, content: message.content };
+}
+
+function visibleReasoningDeltas(delta: any): string[] {
+  if (Array.isArray(delta?.reasoning_details)) {
+    const details = delta.reasoning_details.flatMap((detail: any) => {
+      if (typeof detail?.summary === 'string' && detail.summary) return [detail.summary];
+      if (typeof detail?.text === 'string' && detail.text) return [detail.text];
+      return [];
+    });
+    if (details.length > 0) return details;
+  }
+  if (typeof delta?.reasoning === 'string' && delta.reasoning) return [delta.reasoning];
+  if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content) return [delta.reasoning_content];
+  return [];
 }
 
 export class OpenAiCompatibleProvider implements LlmProvider {
@@ -88,10 +103,10 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       signal,
       body: JSON.stringify({
         model: request.model,
-        messages: request.messages.map(toOpenAiMessage),
+        messages: request.messages.map((message) => toOpenAiMessage(message, this.id === 'openrouter')),
         stream: true,
         stream_options: { include_usage: true },
-        max_tokens: request.maxTokens,
+        ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
         ...(request.tools.length > 0
           ? {
@@ -121,16 +136,23 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       }
       if (chunk?.error) throw new Gw2ccError('LLM_UPSTREAM_ERROR', 'The LLM provider reported an error while streaming.', { retryable: true });
       if (chunk?.usage && typeof chunk.usage === 'object') {
+        const tokenDetails = chunk.usage.completion_tokens_details ?? chunk.usage.output_tokens_details;
         yield {
           type: 'usage',
           ...(typeof chunk.usage.prompt_tokens === 'number' ? { inputTokens: chunk.usage.prompt_tokens } : {}),
-          ...(typeof chunk.usage.completion_tokens === 'number' ? { outputTokens: chunk.usage.completion_tokens } : {})
+          ...(typeof chunk.usage.completion_tokens === 'number' ? { outputTokens: chunk.usage.completion_tokens } : {}),
+          ...(typeof tokenDetails?.reasoning_tokens === 'number'
+            ? { reasoningTokens: tokenDetails.reasoning_tokens }
+            : {})
         };
       }
       const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : undefined;
       if (!choice) continue;
       if (typeof choice.finish_reason === 'string') finishReason = choice.finish_reason;
       const delta = choice.delta;
+      for (const reasoning of visibleReasoningDeltas(delta)) {
+        yield { type: 'reasoning_delta', delta: reasoning };
+      }
       if (typeof delta?.content === 'string' && delta.content) yield { type: 'text_delta', delta: delta.content };
       if (Array.isArray(delta?.tool_calls)) {
         for (const fragment of delta.tool_calls) {

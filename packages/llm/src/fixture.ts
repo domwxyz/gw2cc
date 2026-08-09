@@ -52,6 +52,7 @@ export class FixtureLlmProvider implements LlmProvider {
     } catch {
       // The fixture still returns a deterministic final answer for structured tool errors.
     }
+    yield { type: 'reasoning_delta', delta: 'Reviewed the fixture tool provenance and prepared a bounded answer.' };
     for (const delta of [
       'I combined the fixture-backed live ArenaNet account data with external Guild Wars 2 Wiki research. ',
       bankSlots === undefined ? 'The bank result was bounded but did not expose a slot count.' : `The fixture bank has ${bankSlots} non-empty returned slots.`,
@@ -61,6 +62,7 @@ export class FixtureLlmProvider implements LlmProvider {
       yield { type: 'text_delta', delta };
       await Promise.resolve();
     }
+    yield { type: 'usage', inputTokens: 240, outputTokens: 72, reasoningTokens: 14 };
     yield { type: 'completed', finishReason: 'stop' };
   }
 }

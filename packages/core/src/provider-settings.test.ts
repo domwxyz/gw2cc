@@ -36,12 +36,24 @@ describe('provider settings and model validation', () => {
       toolsEnabled: true,
       apiKey: 'secret-provider-key'
     });
-    expect(view).toMatchObject({ credentialConfigured: true, ready: true });
+    expect(view).toMatchObject({
+      credentialConfigured: true,
+      ready: true,
+      configuration: { maxTokensEnabled: false, maxTokens: 2048 }
+    });
     expect(JSON.stringify([...values.values()])).not.toContain('secret-provider-key');
     expect(await secrets.get('openrouter-api-key')).toBe('secret-provider-key');
     const validated = await service.test();
     expect(validated).toMatchObject({ ok: true, model: 'model-a' });
     expect(validated.models).toEqual([{ id: 'model-a', name: 'Model A' }, { id: 'model-b' }]);
+
+    await service.update({
+      providerId: 'openrouter', model: 'model-a', toolsEnabled: true,
+      maxTokensEnabled: true, maxTokens: 4096
+    });
+    expect(await service.getView()).toMatchObject({
+      configuration: { maxTokensEnabled: true, maxTokens: 4096 }
+    });
 
     await service.update({ providerId: 'openrouter', model: 'missing-model', toolsEnabled: false });
     await expect(service.test()).rejects.toMatchObject({ code: 'LLM_MODEL_NOT_FOUND' });

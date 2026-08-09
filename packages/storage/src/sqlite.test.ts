@@ -105,7 +105,11 @@ describe('SQLite migrations and repositories', () => {
       await storage.repositories.conversations.updateMessage({
         id: 'assistant-1', conversationId: 'conversation-1', role: 'assistant', content: 'Answer',
         focusedCharacterName: 'Aurelia Ward', providerId: 'anthropic', modelId: 'claude-test',
-        createdAt: 3, status: 'complete'
+        createdAt: 3, status: 'complete',
+        reasoningTrace: {
+          content: 'Inspected the current build.', inputTokens: 20, outputTokens: 8,
+          reasoningTokens: 3, finishReason: 'end_turn'
+        }
       });
       await storage.repositories.conversations.addToolCall({
         id: 'tool-1', messageId: 'assistant-1', toolName: 'gw2_get_account', arguments: {},
@@ -120,7 +124,13 @@ describe('SQLite migrations and repositories', () => {
         id: 'conversation-1',
         messages: [
           { id: 'user-1', focusedCharacterName: 'Aurelia Ward', status: 'complete' },
-          { id: 'assistant-1', providerId: 'anthropic', content: 'Answer', status: 'complete' }
+          {
+            id: 'assistant-1', providerId: 'anthropic', content: 'Answer', status: 'complete',
+            reasoningTrace: {
+              content: 'Inspected the current build.', inputTokens: 20, outputTokens: 8,
+              reasoningTokens: 3, finishReason: 'end_turn'
+            }
+          }
         ],
         toolCalls: [{ id: 'tool-1', status: 'completed', contentOffset: 0, result: { ok: true } }]
       });

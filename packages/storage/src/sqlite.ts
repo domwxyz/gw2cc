@@ -249,7 +249,11 @@ export class SqliteConversationRepository implements ConversationRepository {
       .filter((message) => message.role === 'user' || message.role === 'assistant')
       .map((message) => {
         const metadata = message.metadata_json
-          ? parseJson<{ status?: ConversationMessage['status']; error?: ConversationMessage['error'] }>(message.metadata_json, 'message metadata')
+          ? parseJson<{
+              status?: ConversationMessage['status'];
+              reasoningTrace?: ConversationMessage['reasoningTrace'];
+              error?: ConversationMessage['error'];
+            }>(message.metadata_json, 'message metadata')
           : {};
         return {
           id: message.id,
@@ -261,6 +265,7 @@ export class SqliteConversationRepository implements ConversationRepository {
           ...(message.model_id ? { modelId: message.model_id } : {}),
           createdAt: message.created_at,
           status: metadata.status ?? 'complete',
+          ...(metadata.reasoningTrace ? { reasoningTrace: metadata.reasoningTrace } : {}),
           ...(metadata.error ? { error: metadata.error } : {})
         };
       });
@@ -345,7 +350,11 @@ export class SqliteConversationRepository implements ConversationRepository {
         message.providerId ?? null,
         message.modelId ?? null,
         message.createdAt,
-        JSON.stringify({ status: message.status, ...(message.error ? { error: message.error } : {}) })
+        JSON.stringify({
+          status: message.status,
+          ...(message.reasoningTrace ? { reasoningTrace: message.reasoningTrace } : {}),
+          ...(message.error ? { error: message.error } : {})
+        })
       );
       this.database.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?')
         .run(message.createdAt, message.conversationId);
@@ -362,7 +371,11 @@ export class SqliteConversationRepository implements ConversationRepository {
       message.focusedCharacterName ?? null,
       message.providerId ?? null,
       message.modelId ?? null,
-      JSON.stringify({ status: message.status, ...(message.error ? { error: message.error } : {}) }),
+      JSON.stringify({
+        status: message.status,
+        ...(message.reasoningTrace ? { reasoningTrace: message.reasoningTrace } : {}),
+        ...(message.error ? { error: message.error } : {})
+      }),
       message.id
     );
     this.database.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?')

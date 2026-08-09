@@ -392,6 +392,28 @@ function mergeEvent(payload: BootstrapPayload, event: Gw2ccEvent): BootstrapPayl
       }
     };
   }
+  if (event.type === 'chat.reasoningDelta') {
+    if (!conversation.messages.some((message) => message.id === event.messageId)) return payload;
+    return {
+      ...payload,
+      chat: {
+        ...payload.chat,
+        conversation: {
+          ...conversation,
+          messages: conversation.messages.map((message) => message.id === event.messageId
+            ? {
+                ...message,
+                reasoningTrace: {
+                  ...(message.reasoningTrace ?? { content: '' }),
+                  content: `${message.reasoningTrace?.content ?? ''}${event.delta}`,
+                  ...(event.truncated ? { truncated: true } : {})
+                }
+              }
+            : message)
+        }
+      }
+    };
+  }
   if (event.type === 'chat.toolStarted' || event.type === 'chat.toolCompleted') {
     if (!conversation.messages.some((message) => message.id === event.messageId)) return payload;
     const exists = conversation.toolCalls.some((call) => call.id === event.toolCall.id);
@@ -539,6 +561,7 @@ function SettingsPanel({ payload, onClose, onPayload }: { payload: BootstrapPayl
   const [baseUrl, setBaseUrl] = useState(payload.chat.provider.configuration.baseUrl ?? PROVIDER_DEFAULT_BASE_URLS[configuredProvider]);
   const [providerKey, setProviderKey] = useState('');
   const [toolsEnabled, setToolsEnabled] = useState(payload.chat.provider.configuration.toolsEnabled);
+  const [maxTokensEnabled, setMaxTokensEnabled] = useState(payload.chat.provider.configuration.maxTokensEnabled);
   const [maxTokens, setMaxTokens] = useState(payload.chat.provider.configuration.maxTokens);
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [catalogState, setCatalogState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
@@ -563,6 +586,7 @@ function SettingsPanel({ payload, onClose, onPayload }: { payload: BootstrapPayl
       model: nextModel,
       baseUrl: baseUrl.trim(),
       toolsEnabled,
+      maxTokensEnabled,
       maxTokens
     }),
     onSuccess: updateProviderPayload
@@ -578,6 +602,7 @@ function SettingsPanel({ payload, onClose, onPayload }: { payload: BootstrapPayl
         model: nextModel,
         baseUrl: nextBaseUrl.trim(),
         toolsEnabled,
+        maxTokensEnabled,
         maxTokens,
         ...(nextKey ? { apiKey: nextKey } : {})
       });
@@ -593,6 +618,7 @@ function SettingsPanel({ payload, onClose, onPayload }: { payload: BootstrapPayl
             model: selectedModel,
             baseUrl: nextBaseUrl.trim(),
             toolsEnabled,
+            maxTokensEnabled,
             maxTokens
           });
         }
@@ -731,7 +757,11 @@ function SettingsPanel({ payload, onClose, onPayload }: { payload: BootstrapPayl
                   <label className="field-label">API key {providerId === 'ollama' || providerId === 'openai-compatible' ? '(optional)' : ''}
                     <input aria-label="Provider API key" type="password" autoComplete="off" value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder={payload.chat.provider.credentialConfigured ? 'Saved credential configured' : 'Paste provider credential'} />
                   </label>
-                  <label className="field-label">Maximum output tokens<input aria-label="Maximum output tokens" type="number" min={128} max={16384} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>
+                  <div className={`output-limit-setting ${maxTokensEnabled ? 'enabled' : ''}`}>
+                    <label className="output-limit-toggle"><input aria-label="Limit output tokens" type="checkbox" checked={maxTokensEnabled} onChange={(event) => setMaxTokensEnabled(event.target.checked)} /><span>Limit output tokens</span></label>
+                    <input aria-label="Maximum output tokens" type="number" min={128} max={16384} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} disabled={!maxTokensEnabled} />
+                    <small>{maxTokensEnabled ? 'GW2CC will stop generation at this cap.' : 'Off — use the provider-compatible default.'}</small>
+                  </div>
                 </div>
                 <label className="tool-toggle"><input type="checkbox" checked={toolsEnabled} onChange={(event) => setToolsEnabled(event.target.checked)} /><span><strong>GW2 and research tools</strong><small>Disable only for models without tool calling.</small></span></label>
                 <div className="settings-actions">

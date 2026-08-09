@@ -14,6 +14,7 @@ function toOllamaMessage(message: LlmMessage): Record<string, unknown> {
     return {
       role: 'assistant',
       content: message.content,
+      ...(message.reasoning ? { thinking: message.reasoning } : {}),
       ...(message.toolCalls?.length
         ? {
             tool_calls: message.toolCalls.map((call, index) => ({
@@ -65,10 +66,14 @@ export class OllamaProvider implements LlmProvider {
         model: request.model,
         messages: request.messages.map(toOllamaMessage),
         stream: true,
-        options: {
-          num_predict: request.maxTokens,
-          ...(request.temperature !== undefined ? { temperature: request.temperature } : {})
-        },
+        ...(request.maxTokens !== undefined || request.temperature !== undefined
+          ? {
+              options: {
+                ...(request.maxTokens !== undefined ? { num_predict: request.maxTokens } : {}),
+                ...(request.temperature !== undefined ? { temperature: request.temperature } : {})
+              }
+            }
+          : {}),
         ...(request.tools.length > 0
           ? {
               tools: request.tools.map((tool) => ({
@@ -91,6 +96,9 @@ export class OllamaProvider implements LlmProvider {
         throw providerStreamError();
       }
       if (chunk?.error) throw new Gw2ccError('LLM_UPSTREAM_ERROR', 'Ollama reported an error while streaming.');
+      if (typeof chunk?.message?.thinking === 'string' && chunk.message.thinking) {
+        yield { type: 'reasoning_delta', delta: chunk.message.thinking };
+      }
       if (typeof chunk?.message?.content === 'string' && chunk.message.content) {
         yield { type: 'text_delta', delta: chunk.message.content };
       }

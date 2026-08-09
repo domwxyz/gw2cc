@@ -4,6 +4,7 @@ import { formatConversationTime } from '../../lib/format';
 import { ToolActivityCard } from './ToolActivityCard';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageActions, type MessageAction } from './MessageActions';
+import { ReasoningTrace } from './ReasoningTrace';
 import { useCopyAction } from './useCopyAction';
 
 type MessageSegment =
@@ -120,6 +121,7 @@ export function MessageBubble({ message, toolCalls, generating, latestUser, onRe
     <article className="message-row message-row-assistant">
       <div className="assistant-label"><strong>GW2CC</strong><span>{message.focusedCharacterName ?? 'Account'}</span>{message.modelId && <span>{message.modelId}</span>}<time>{formatConversationTime(message.createdAt)}</time></div>
       <div className="assistant-message-shell">
+        {message.reasoningTrace && <ReasoningTrace trace={message.reasoningTrace} generating={generating} />}
         {collapsed ? (
           <div className="message-bubble assistant assistant-preview"><p>{message.content.slice(0, COLLAPSE_PREVIEW).trimEnd()}…</p></div>
         ) : (

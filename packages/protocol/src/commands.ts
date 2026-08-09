@@ -42,6 +42,7 @@ export interface CommandMap {
       model: string;
       baseUrl?: string;
       toolsEnabled: boolean;
+      maxTokensEnabled?: boolean;
       maxTokens?: number;
       temperature?: number;
       apiKey?: string;
@@ -149,6 +150,7 @@ const definitions: Record<CommandName, { input: z.ZodType; output: z.ZodType }> 
       model: z.string().trim().max(256),
       baseUrl: z.string().trim().max(2_000).optional(),
       toolsEnabled: z.boolean(),
+      maxTokensEnabled: z.boolean().optional(),
       maxTokens: z.number().int().min(128).max(16_384).optional(),
       temperature: z.number().min(0).max(2).optional(),
       apiKey: z.string().trim().min(1).max(4_096).optional(),
