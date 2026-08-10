@@ -1,6 +1,7 @@
 import type {
   BootstrapPayload,
   ChatSendResult,
+  ConversationAttachment,
   ConversationDetail,
   ConversationSummary,
   EquippedItem,
@@ -15,6 +16,7 @@ import { Gw2ccError, toErrorPayload } from '@gw2cc/core';
 import { z } from 'zod';
 import {
   bootstrapSchema,
+  conversationAttachmentsSchema,
   conversationDetailSchema,
   conversationSummarySchema,
   equippedItemSchema,
@@ -65,7 +67,10 @@ export interface CommandMap {
   'conversations.setPinned': { input: { id: string; isPinned: boolean }; output: ConversationDetail };
   'conversations.delete': { input: { id: string }; output: ConversationDetail };
   'conversations.fork': { input: { id: string; messageId: string }; output: ConversationDetail };
-  'chat.send': { input: { content: string; conversationId?: string }; output: ChatSendResult };
+  'chat.send': {
+    input: { content: string; conversationId?: string; attachments?: ConversationAttachment[] };
+    output: ChatSendResult;
+  };
   'chat.cancel': { input: { runId: string }; output: { cancelled: boolean } };
   'chat.retry': { input: { messageId: string }; output: ChatSendResult };
   'chat.edit': { input: { messageId: string; content: string }; output: ChatSendResult };
@@ -218,9 +223,14 @@ const definitions: Record<CommandName, { input: z.ZodType; output: z.ZodType }> 
   },
   'chat.send': {
     input: z.object({
-      content: z.string().trim().min(1).max(40_000),
-      conversationId: z.string().min(1).max(200).optional()
-    }).strict(),
+      content: z.string().max(40_000),
+      conversationId: z.string().min(1).max(200).optional(),
+      attachments: conversationAttachmentsSchema.optional()
+    }).strict().superRefine((input, context) => {
+      if (!input.content.trim() && !input.attachments?.length) {
+        context.addIssue({ code: 'custom', path: ['content'], message: 'Enter a message or attach a file before sending.' });
+      }
+    }),
     output: z.object({
       runId: z.string(), conversationId: z.string(), userMessageId: z.string(), assistantMessageId: z.string()
     })
@@ -236,7 +246,7 @@ const definitions: Record<CommandName, { input: z.ZodType; output: z.ZodType }> 
     })
   },
   'chat.edit': {
-    input: z.object({ messageId: z.string().min(1).max(200), content: z.string().trim().min(1).max(40_000) }).strict(),
+    input: z.object({ messageId: z.string().min(1).max(200), content: z.string().max(40_000) }).strict(),
     output: z.object({
       runId: z.string(), conversationId: z.string(), userMessageId: z.string(), assistantMessageId: z.string()
     })
@@ -351,7 +361,7 @@ export async function handleProtocolRequest(
         output = await application.conversations.fork(input.id, input.messageId);
         break;
       case 'chat.send':
-        output = await application.chat.send(input.content, input.conversationId);
+        output = await application.chat.send(input.content, input.conversationId, input.attachments);
         break;
       case 'chat.cancel':
         output = await application.chat.cancel(input.runId);

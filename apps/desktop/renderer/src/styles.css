@@ -234,6 +234,14 @@ button.equipment-slot:hover { transform: translateY(-1px); background: #211915; 
 .message-bubble.user { margin-left: auto; background: var(--surface-3); }
 .message-bubble.assistant { max-width: 100%; background: #25201f; border: 1px solid var(--line-soft); }
 .user-message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-attachment { min-width: min(360px, 65vw); margin-top: 8px; overflow: hidden; background: #15121199; border: 1px solid var(--line); border-radius: 5px; }
+.message-attachment:first-child { margin-top: 0; }
+.message-attachment summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 8px; cursor: pointer; list-style: none; }
+.message-attachment summary::-webkit-details-marker { display: none; }
+.message-attachment summary > span { padding: 2px 4px; color: var(--gold); background: #3a2f1d; border-radius: 2px; font-size: 7px; font-weight: 800; }
+.message-attachment summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.message-attachment summary small { color: var(--dim); font-size: 7px; }
+.message-attachment pre { max-height: 260px; margin: 0; overflow: auto; padding: 9px; color: var(--muted); background: #0c0a09; border-top: 1px solid var(--line-soft); font: 9px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-context, .assistant-label { display: flex; align-items: center; gap: 7px; margin-top: 3px; color: var(--dim); font-size: 7.5px; }
 .assistant-label { margin: 0 0 1px 2px; }
 .assistant-label strong { color: var(--muted); font-size: 8px; }
@@ -306,10 +314,20 @@ button.equipment-slot:hover { transform: translateY(-1px); background: #211915; 
 .provider-warning { margin: 10px 16px 0; padding: 9px 12px; text-align: left; color: var(--gold); background: #382f20; border: 1px solid #6f5a2d; border-radius: 4px; font-size: 9px; }
 .retrieval-warning { margin: 9px 16px 0; padding: 8px 10px; color: #e7cf9d; background: #382f2066; border: 1px solid #6f5a2d; border-radius: 4px; font-size: 9px; }
 .composer-shell { flex: none; padding: 10px 14px 9px; background: var(--surface-2); border-top: 1px solid var(--line-soft); }
+.visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.composer-attachment { min-width: 0; max-width: 260px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 5px 6px; color: var(--muted); background: #171312; border: 1px solid var(--line); border-radius: 4px; }
+.composer-attachment > span { padding: 2px 4px; color: var(--gold); background: #3a2f1d; border-radius: 2px; font-size: 7px; font-weight: 800; }
+.composer-attachment strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 8.5px; }
+.composer-attachment small { color: var(--dim); font-size: 7px; }
+.composer-attachment button { padding: 0 3px; color: var(--dim); background: transparent; border: 0; font-size: 14px; line-height: 1; }
+.composer-attachment-error { margin-bottom: 7px; color: #f0bbb7; font-size: 8px; }
 .chat-composer { display: flex; align-items: flex-end; gap: 7px; padding: 0; }
 .chat-composer textarea { min-height: 40px; max-height: 200px; flex: 1; resize: none; overflow-y: hidden; padding: 10px 11px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; font-size: 11px; line-height: 1.5; }
 .chat-composer textarea:focus { border-color: var(--jade); outline: 1px solid #db644544; }
 .composer-icon-button { width: 40px; height: 40px; min-width: 40px; display: grid; place-items: center; padding: 0; border-radius: 5px; }
+.attach-button { color: var(--muted); background: var(--surface); border: 1px solid var(--line); }
+.attach-button:hover:not(:disabled) { color: var(--ink); border-color: var(--jade); }
 .send-button { color: white; background: var(--jade); border: 1px solid var(--jade); }
 .send-button:hover { background: #ea5d5d; }
 .stop-button { color: #f0bbb7; background: #3f2224; border: 1px solid #7c3d3f; }

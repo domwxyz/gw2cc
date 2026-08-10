@@ -251,6 +251,7 @@ export class SqliteConversationRepository implements ConversationRepository {
         const metadata = message.metadata_json
           ? parseJson<{
               status?: ConversationMessage['status'];
+              attachments?: ConversationMessage['attachments'];
               reasoningTrace?: ConversationMessage['reasoningTrace'];
               error?: ConversationMessage['error'];
             }>(message.metadata_json, 'message metadata')
@@ -265,6 +266,7 @@ export class SqliteConversationRepository implements ConversationRepository {
           ...(message.model_id ? { modelId: message.model_id } : {}),
           createdAt: message.created_at,
           status: metadata.status ?? 'complete',
+          ...(metadata.attachments?.length ? { attachments: metadata.attachments } : {}),
           ...(metadata.reasoningTrace ? { reasoningTrace: metadata.reasoningTrace } : {}),
           ...(metadata.error ? { error: metadata.error } : {})
         };
@@ -352,6 +354,7 @@ export class SqliteConversationRepository implements ConversationRepository {
         message.createdAt,
         JSON.stringify({
           status: message.status,
+          ...(message.attachments?.length ? { attachments: message.attachments } : {}),
           ...(message.reasoningTrace ? { reasoningTrace: message.reasoningTrace } : {}),
           ...(message.error ? { error: message.error } : {})
         })
@@ -373,6 +376,7 @@ export class SqliteConversationRepository implements ConversationRepository {
       message.modelId ?? null,
       JSON.stringify({
         status: message.status,
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
         ...(message.reasoningTrace ? { reasoningTrace: message.reasoningTrace } : {}),
         ...(message.error ? { error: message.error } : {})
       }),

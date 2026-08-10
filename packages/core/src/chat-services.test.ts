@@ -120,6 +120,48 @@ describe('ChatService bounded orchestration', () => {
     }
   });
 
+  it('persists and frames text attachments, including attachment-only retries and forks', async () => {
+    const provider = new ToolThenAnswerProvider();
+    const harness = createHarness(provider);
+    const attachment = {
+      type: 'text' as const,
+      name: 'rotation.md',
+      mediaType: 'text/markdown' as const,
+      content: '# Rotation\nUse skill two first.',
+      size: 31
+    };
+    try {
+      await harness.application.bootstrap(true);
+      let terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
+      await harness.application.chat.send('', undefined, [attachment]);
+      await terminalPromise;
+
+      const original = await harness.application.conversations.getPrimary();
+      expect(original.title).toBe('Attached rotation.md');
+      expect(original.messages[0]).toMatchObject({ content: '', attachments: [attachment] });
+      const framedUserMessage = provider.requests[0]!.messages.find((message) => message.role === 'user');
+      expect(framedUserMessage?.content).toContain('BEGIN USER-ATTACHED FILE ("rotation.md", text/markdown)');
+      expect(framedUserMessage?.content).toContain('# Rotation\nUse skill two first.');
+
+      terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
+      await harness.application.chat.retry(original.messages[1]!.id);
+      await terminalPromise;
+      const retried = await harness.application.conversations.getPrimary();
+      expect(retried.messages[0]).toMatchObject({ content: '', attachments: [attachment] });
+
+      terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
+      await harness.application.chat.edit(retried.messages[0]!.id, '');
+      await terminalPromise;
+      const edited = await harness.application.conversations.getPrimary();
+      expect(edited.messages[0]).toMatchObject({ content: '', attachments: [attachment] });
+
+      const forked = await harness.application.conversations.fork(edited.id, edited.messages[1]!.id);
+      expect(forked.messages[0]).toMatchObject({ attachments: [attachment] });
+    } finally {
+      harness.storage.close();
+    }
+  });
+
   it('retries and edits the latest turn in place, then forks the complete trace with tool placement', async () => {
     const provider = new ToolThenAnswerProvider();
     const harness = createHarness(provider);

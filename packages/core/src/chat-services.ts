@@ -2,6 +2,7 @@ import type {
   ChatBootstrapPayload,
   ChatSendResult,
   ConversationDetail,
+  ConversationAttachment,
   ConversationMessage,
   ConversationSummary,
   Gw2ccEvent,
@@ -15,7 +16,12 @@ import type {
   ProviderTestResult,
   UserConfigurableProviderId
 } from './chat-domain';
-import { USER_CONFIGURABLE_PROVIDER_IDS } from './chat-domain';
+import {
+  MAX_MESSAGE_ATTACHMENTS,
+  MAX_TEXT_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES,
+  USER_CONFIGURABLE_PROVIDER_IDS
+} from './chat-domain';
 import { Gw2ccError, toErrorPayload } from './errors';
 import type {
   AccountRepository,
@@ -45,6 +51,34 @@ function titleFromFirstMessage(content: string): string {
     .trim();
   if (normalized.length <= 64) return normalized;
   return `${normalized.slice(0, 61).trimEnd()}...`;
+}
+
+function normalizeAttachments(attachments: readonly ConversationAttachment[]): ConversationAttachment[] {
+  if (attachments.length > MAX_MESSAGE_ATTACHMENTS) {
+    throw new Gw2ccError('VALIDATION_ERROR', `Attach no more than ${MAX_MESSAGE_ATTACHMENTS} files to one message.`);
+  }
+  let totalBytes = 0;
+  return attachments.map((attachment) => {
+    const name = attachment.name.trim();
+    const extension = name.slice(name.lastIndexOf('.')).toLowerCase();
+    const expectedMediaType = extension === '.md' ? 'text/markdown' : extension === '.txt' ? 'text/plain' : undefined;
+    const contentBytes = new TextEncoder().encode(attachment.content).byteLength;
+    if (!name || name.length > 255 || !expectedMediaType || attachment.mediaType !== expectedMediaType) {
+      throw new Gw2ccError('VALIDATION_ERROR', 'Only .txt and .md text attachments are supported.');
+    }
+    if (!Number.isSafeInteger(attachment.size) || attachment.size < 0 ||
+        attachment.size > MAX_TEXT_ATTACHMENT_BYTES || contentBytes > MAX_TEXT_ATTACHMENT_BYTES) {
+      throw new Gw2ccError('VALIDATION_ERROR', `Each attachment must be ${MAX_TEXT_ATTACHMENT_BYTES / 1_000} KB or smaller.`);
+    }
+    if (attachment.content.includes('\0')) {
+      throw new Gw2ccError('VALIDATION_ERROR', `${name} does not appear to be a plain-text file.`);
+    }
+    totalBytes += Math.max(attachment.size, contentBytes);
+    if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+      throw new Gw2ccError('VALIDATION_ERROR', `Attachments may total no more than ${MAX_TOTAL_ATTACHMENT_BYTES / 1_000} KB.`);
+    }
+    return { ...attachment, name };
+  });
 }
 
 function normalizeProviderEvent(value: unknown): import('./chat-domain').LlmEvent {
@@ -466,16 +500,24 @@ export class ChatService {
     };
   }
 
-  async send(content: string, conversationId?: string): Promise<ChatSendResult> {
+  async send(
+    content: string,
+    conversationId?: string,
+    attachments: readonly ConversationAttachment[] = []
+  ): Promise<ChatSendResult> {
     const trimmed = content.trim();
-    if (!trimmed) throw new Gw2ccError('VALIDATION_ERROR', 'Enter a message before sending.');
+    const normalizedAttachments = normalizeAttachments(attachments);
+    if (!trimmed && !normalizedAttachments.length) {
+      throw new Gw2ccError('VALIDATION_ERROR', 'Enter a message or attach a file before sending.');
+    }
     const { provider, configuration } = await this.providers.resolveActive();
     let conversation = conversationId
       ? await this.conversations.get(conversationId)
       : await this.conversations.getPrimary();
     if (conversation.messages.length === 0 &&
         (!conversation.title || DEFAULT_CONVERSATION_TITLES.has(conversation.title))) {
-      conversation = await this.conversations.rename(conversation.id, titleFromFirstMessage(trimmed));
+      const titleSource = trimmed || `Attached ${normalizedAttachments[0]!.name}`;
+      conversation = await this.conversations.rename(conversation.id, titleFromFirstMessage(titleSource));
     }
     const account = await this.accounts.getActive();
     const focus = account?.selectedCharacterName;
@@ -487,6 +529,7 @@ export class ChatService {
       conversationId: conversation.id,
       role: 'user',
       content: trimmed,
+      ...(normalizedAttachments.length ? { attachments: normalizedAttachments } : {}),
       ...(focus ? { focusedCharacterName: focus } : {}),
       createdAt: now,
       status: 'complete'
@@ -547,7 +590,7 @@ export class ChatService {
       const message = conversation.messages[cursor];
       if (message?.role === 'user') {
         await this.repository.deleteMessagesFrom(conversation.id, message.id);
-        return this.send(message.content, conversation.id);
+        return this.send(message.content, conversation.id, message.attachments);
       }
     }
     throw new Gw2ccError('VALIDATION_ERROR', 'There is no user message to retry.');
@@ -555,18 +598,20 @@ export class ChatService {
 
   async edit(messageId: string, content: string): Promise<ChatSendResult> {
     const trimmed = content.trim();
-    if (!trimmed) throw new Gw2ccError('VALIDATION_ERROR', 'Enter a message before resending.');
     const conversation = await this.conversations.getPrimary();
     const message = conversation.messages.find((entry) => entry.id === messageId);
     if (!message || message.role !== 'user') {
       throw new Gw2ccError('VALIDATION_ERROR', 'Only a user message can be edited.');
+    }
+    if (!trimmed && !message.attachments?.length) {
+      throw new Gw2ccError('VALIDATION_ERROR', 'Enter a message before resending.');
     }
     const lastUser = [...conversation.messages].reverse().find((entry) => entry.role === 'user');
     if (lastUser?.id !== message.id) {
       throw new Gw2ccError('VALIDATION_ERROR', 'Only the latest user message can be edited and resent.');
     }
     await this.repository.deleteMessagesFrom(conversation.id, message.id);
-    return this.send(trimmed, conversation.id);
+    return this.send(trimmed, conversation.id, message.attachments);
   }
 
   private async run(input: {

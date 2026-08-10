@@ -323,6 +323,51 @@ describe('Phase 1 renderer interactions', () => {
     expect(screen.getByText('Checking live data.')).toBeInTheDocument();
   });
 
+  it('attaches Markdown files, sends attachment-only turns, and renders persisted file cards', async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(await screen.findByRole('tab', { name: 'Console' }));
+    await screen.findByRole('heading', { name: 'Account-wide chat' });
+
+    const file = new File(['# Rotation\nTwo'], 'rotation.md', { type: 'text/markdown' });
+    await user.upload(screen.getByLabelText('Attach text files'), file);
+    expect(await screen.findByText('rotation.md')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove rotation.md' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(requestMock).toHaveBeenCalledWith('chat.send', {
+      content: '',
+      conversationId: 'conversation-1',
+      attachments: [{
+        type: 'text', name: 'rotation.md', mediaType: 'text/markdown',
+        content: '# Rotation\nTwo', size: 14
+      }]
+    }));
+
+    const userMessage = {
+      id: 'attachment-user', conversationId: 'conversation-1', role: 'user' as const,
+      content: '', createdAt: 2, status: 'complete' as const,
+      attachments: [{
+        type: 'text' as const, name: 'rotation.md', mediaType: 'text/markdown' as const,
+        content: '# Rotation\nTwo', size: 14
+      }]
+    };
+    const assistantMessage = {
+      id: 'attachment-assistant', conversationId: 'conversation-1', role: 'assistant' as const,
+      content: '', providerId: 'fixture' as const, modelId: 'fixture-gw2-assistant',
+      createdAt: 3, status: 'streaming' as const
+    };
+    emitEvent({
+      type: 'chat.started', runId: 'run-1', conversationId: 'conversation-1', userMessage, assistantMessage
+    });
+    const attachedCard = await screen.findByText('rotation.md');
+    const details = attachedCard.closest('details');
+    expect(details).not.toBeNull();
+    await user.click(attachedCard);
+    expect(details).toHaveAttribute('open');
+    expect(details?.querySelector('pre')).toHaveTextContent('# Rotation Two');
+  });
+
   it('renders Markdown and supports keyboard send, retry, edit-and-resend, and assistant forks', async () => {
     const userMessage = {
       id: 'existing-user', conversationId: 'conversation-1', role: 'user' as const,

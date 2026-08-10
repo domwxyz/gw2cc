@@ -7,6 +7,7 @@ export type {
   BootstrapPayload,
   BuildInspection,
   ChatSendResult,
+  ConversationAttachment,
   ConversationDetail,
   ConversationMessage,
   ConversationSummary,
@@ -17,4 +18,9 @@ export type {
   ProviderTestResult,
   ReasoningTrace,
   SkillSelection
+} from '@gw2cc/core';
+export {
+  MAX_MESSAGE_ATTACHMENTS,
+  MAX_TEXT_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES
 } from '@gw2cc/core';

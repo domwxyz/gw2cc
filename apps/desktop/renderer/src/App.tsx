@@ -4,6 +4,7 @@ import type {
   AttributeKey,
   BootstrapPayload,
   BuildInspection,
+  ConversationAttachment,
   ConversationDetail,
   ConversationMessage,
   EquippedItem,
@@ -446,11 +447,13 @@ function mergeEvent(payload: BootstrapPayload, event: Gw2ccEvent): BootstrapPayl
 function ChatWorkspace({ payload, onSettings }: { payload: BootstrapPayload; onSettings(): void }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<ConversationAttachment[]>([]);
   const [runId, setRunId] = useState<string>();
   const conversation = payload.chat.conversation;
   const provider = payload.chat.provider;
   const activateConversation = (next: ConversationDetail) => {
     setDraft('');
+    setAttachments([]);
     queryClient.setQueryData<BootstrapPayload>(BOOTSTRAP_KEY, (current) => current
       ? { ...current, chat: { ...current.chat, conversation: next } }
       : current);
@@ -471,11 +474,13 @@ function ChatWorkspace({ payload, onSettings }: { payload: BootstrapPayload; onS
   const send = useMutation({
     mutationFn: () => window.gw2cc.request('chat.send', {
       content: draft,
-      conversationId: conversation.id
+      conversationId: conversation.id,
+      ...(attachments.length ? { attachments } : {})
     }),
     onSuccess: (result) => {
       setRunId(result.runId);
       setDraft('');
+      setAttachments([]);
     }
   });
   const cancel = useMutation({
@@ -540,8 +545,10 @@ function ChatWorkspace({ payload, onSettings }: { payload: BootstrapPayload; onS
           ready={provider.ready}
           generating={generating}
           sending={send.isPending}
+          attachments={attachments}
           focusedCharacter={payload.connection.selectedCharacterName}
           onChange={setDraft}
+          onAttachmentsChange={setAttachments}
           onSend={() => send.mutate()}
           onCancel={() => cancel.mutate()}
         />

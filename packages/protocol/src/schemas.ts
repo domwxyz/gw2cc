@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  MAX_MESSAGE_ATTACHMENTS,
+  MAX_TEXT_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES
+} from '@gw2cc/core';
 
 const itemAttributeSchema = z.object({
   attribute: z.enum([
@@ -179,6 +184,29 @@ export const reasoningTraceSchema = z.object({
   truncated: z.boolean().optional()
 });
 
+export const conversationAttachmentSchema = z.object({
+  type: z.literal('text'),
+  name: z.string().trim().min(1).max(255),
+  mediaType: z.enum(['text/plain', 'text/markdown']),
+  content: z.string().max(MAX_TEXT_ATTACHMENT_BYTES),
+  size: z.number().int().nonnegative().max(MAX_TEXT_ATTACHMENT_BYTES)
+}).strict().superRefine((attachment, context) => {
+  if (new TextEncoder().encode(attachment.content).byteLength > MAX_TEXT_ATTACHMENT_BYTES) {
+    context.addIssue({ code: 'custom', path: ['content'], message: 'Attachment content is too large.' });
+  }
+});
+
+export const conversationAttachmentsSchema = z.array(conversationAttachmentSchema)
+  .max(MAX_MESSAGE_ATTACHMENTS)
+  .superRefine((attachments, context) => {
+    const total = attachments.reduce((sum, attachment) => (
+      sum + Math.max(attachment.size, new TextEncoder().encode(attachment.content).byteLength)
+    ), 0);
+    if (total > MAX_TOTAL_ATTACHMENT_BYTES) {
+      context.addIssue({ code: 'custom', message: 'Combined attachment size is too large.' });
+    }
+  });
+
 export const conversationMessageSchema = z.object({
   id: z.string(),
   conversationId: z.string(),
@@ -189,6 +217,7 @@ export const conversationMessageSchema = z.object({
   modelId: z.string().optional(),
   createdAt: z.number(),
   status: z.enum(['streaming', 'complete', 'failed', 'cancelled']),
+  attachments: conversationAttachmentsSchema.optional(),
   reasoningTrace: reasoningTraceSchema.optional(),
   error: errorSchema.optional()
 });

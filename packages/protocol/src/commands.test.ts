@@ -95,11 +95,20 @@ describe('transport-neutral protocol validation', () => {
           }
         });
       });
-      const run = await harness.client.request('chat.send', { content: 'Inspect my attributes.' });
+      const run = await harness.client.request('chat.send', {
+        content: 'Inspect my attributes.',
+        attachments: [{
+          type: 'text', name: 'goals.txt', mediaType: 'text/plain',
+          content: 'Prioritize survivability.', size: 24
+        }]
+      });
       expect(run.runId).toBeTruthy();
       await expect(terminal).resolves.toContain('fixture-backed live ArenaNet account data');
       const conversation = await harness.client.request('conversations.get', {});
       expect(conversation.messages).toHaveLength(2);
+      expect(conversation.messages[0]).toMatchObject({
+        attachments: [{ name: 'goals.txt', content: 'Prioritize survivability.' }]
+      });
       expect(conversation.messages[1]).toMatchObject({
         reasoningTrace: {
           content: expect.stringContaining('fixture tool provenance'),
@@ -138,7 +147,10 @@ describe('transport-neutral protocol validation', () => {
       });
       await editedTerminal;
       await expect(harness.client.request('conversations.get', { id: conversation.id })).resolves.toMatchObject({
-        messages: [{ role: 'user', content: 'Inspect my edited attributes.' }, { role: 'assistant', status: 'complete' }]
+        messages: [{
+          role: 'user', content: 'Inspect my edited attributes.',
+          attachments: [{ name: 'goals.txt', content: 'Prioritize survivability.' }]
+        }, { role: 'assistant', status: 'complete' }]
       });
 
       const second = await harness.client.request('conversations.create', { title: 'Build notes' });

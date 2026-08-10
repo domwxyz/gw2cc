@@ -14,6 +14,10 @@ type MessageSegment =
 const COLLAPSE_MINIMUM = 700;
 const COLLAPSE_PREVIEW = 280;
 
+function attachmentSize(size: number): string {
+  return size < 1_000 ? `${size} B` : `${Math.ceil(size / 1_000)} KB`;
+}
+
 function buildSegments(content: string, toolCalls: PersistedToolCall[]): MessageSegment[] {
   if (!toolCalls.length) return content ? [{ kind: 'text', content }] : [];
   const legacy = toolCalls.filter((call) => call.contentOffset === undefined);
@@ -70,7 +74,7 @@ export function MessageBubble({ message, toolCalls, generating, latestUser, onRe
 
   const submitEdit = async () => {
     const content = editValue.trim();
-    if (!content || submitting) return;
+    if ((!content && !message.attachments?.length) || submitting) return;
     setSubmitting(true);
     try {
       await onEdit(message.id, content);
@@ -107,9 +111,19 @@ export function MessageBubble({ message, toolCalls, generating, latestUser, onRe
                 }}
                 disabled={submitting}
               />
-              <div><button type="button" onClick={() => setEditing(false)} disabled={submitting}>Cancel</button><button type="button" className="primary-button" onClick={() => void submitEdit()} disabled={!editValue.trim() || submitting}>{submitting ? 'Resending…' : 'Resend'}</button></div>
+              <div><button type="button" onClick={() => setEditing(false)} disabled={submitting}>Cancel</button><button type="button" className="primary-button" onClick={() => void submitEdit()} disabled={(!editValue.trim() && !message.attachments?.length) || submitting}>{submitting ? 'Resending…' : 'Resend'}</button></div>
             </div>
-          ) : <p className="user-message-text">{message.content}</p>}
+          ) : message.content ? <p className="user-message-text">{message.content}</p> : null}
+          {message.attachments?.map((attachment, index) => (
+            <details className="message-attachment" key={`${attachment.name}-${index}`}>
+              <summary>
+                <span aria-hidden="true">{attachment.mediaType === 'text/markdown' ? 'MD' : 'TXT'}</span>
+                <strong>{attachment.name}</strong>
+                <small>{attachmentSize(attachment.size)}</small>
+              </summary>
+              <pre>{attachment.content}</pre>
+            </details>
+          ))}
         </div>
         <div className="message-context"><span>{message.focusedCharacterName ?? 'Account'}</span><time>{formatConversationTime(message.createdAt)}</time></div>
         <MessageActions actions={actions} align="right" />

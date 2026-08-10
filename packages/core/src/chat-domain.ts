@@ -112,6 +112,19 @@ export interface ConversationSummary {
 
 export type ConversationMessageStatus = 'streaming' | 'complete' | 'failed' | 'cancelled';
 
+export const MAX_MESSAGE_ATTACHMENTS = 5;
+export const MAX_TEXT_ATTACHMENT_BYTES = 100_000;
+export const MAX_TOTAL_ATTACHMENT_BYTES = 250_000;
+
+/** A persisted, provider-neutral attachment union designed for future attachment kinds. */
+export type ConversationAttachment = {
+  type: 'text';
+  name: string;
+  mediaType: 'text/plain' | 'text/markdown';
+  content: string;
+  size: number;
+};
+
 export interface ReasoningTrace {
   /** Visible text explicitly returned by the provider; it may be raw, summarized, or omitted. */
   content: string;
@@ -132,6 +145,7 @@ export interface ConversationMessage {
   modelId?: string;
   createdAt: number;
   status: ConversationMessageStatus;
+  attachments?: ConversationAttachment[];
   reasoningTrace?: ReasoningTrace;
   error?: Gw2ccErrorPayload;
 }

@@ -95,7 +95,11 @@ describe('SQLite migrations and repositories', () => {
       });
       await storage.repositories.conversations.addMessage({
         id: 'user-1', conversationId: 'conversation-1', role: 'user', content: 'Question',
-        focusedCharacterName: 'Aurelia Ward', createdAt: 2, status: 'complete'
+        focusedCharacterName: 'Aurelia Ward', createdAt: 2, status: 'complete',
+        attachments: [{
+          type: 'text', name: 'build-notes.md', mediaType: 'text/markdown',
+          content: '# Build notes', size: 13
+        }]
       });
       await storage.repositories.conversations.addMessage({
         id: 'assistant-1', conversationId: 'conversation-1', role: 'assistant', content: '',
@@ -123,7 +127,10 @@ describe('SQLite migrations and repositories', () => {
       expect(restored).toMatchObject({
         id: 'conversation-1',
         messages: [
-          { id: 'user-1', focusedCharacterName: 'Aurelia Ward', status: 'complete' },
+          {
+            id: 'user-1', focusedCharacterName: 'Aurelia Ward', status: 'complete',
+            attachments: [{ name: 'build-notes.md', content: '# Build notes' }]
+          },
           {
             id: 'assistant-1', providerId: 'anthropic', content: 'Answer', status: 'complete',
             reasoningTrace: {
