@@ -16,6 +16,7 @@ import { CompositeToolExecutor, Gw2ToolExecutor, WebResearchToolExecutor } from 
 import { FixtureResearchGateway, LiveResearchGateway, SafePageFetcher, TavilyClient } from '@gw2cc/web';
 import { ElectronSecretStore } from './secret-store';
 import { createPinnedWebNetworking, type PinnedWebNetworking } from './pinned-web-fetch';
+import { installContextMenu } from './context-menu';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const applicationId = 'com.gw2cc.desktop';
@@ -122,6 +123,7 @@ function createWindow(): BrowserWindow {
     }
   });
   window.once('ready-to-show', () => window.show());
+  installContextMenu(window);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   if (process.env.ELECTRON_RENDERER_URL) {

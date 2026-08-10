@@ -284,11 +284,12 @@ button.equipment-slot:hover { transform: translateY(-1px); background: #211915; 
 .message-markdown th { background: var(--surface-3); }
 .streaming-bubble { min-width: 42px; min-height: 30px; }
 .streaming-cursor { display: inline-block; width: 7px; height: 14px; background: var(--jade); animation: cursor-blink 1s steps(1) infinite; }
-.message-collapse { align-self: flex-end; margin-top: -2px; padding: 3px 6px; color: var(--dim); background: transparent; border: 0; font-size: 8px; }
+.message-controls { width: min(86%, 920px); min-height: 22px; display: flex; align-items: center; }
+.message-collapse { margin-left: auto; padding: 3px 6px; color: var(--dim); background: transparent; border: 0; font-size: 8px; }
 .message-collapse:hover { color: var(--muted); }
 .message-actions { height: 22px; display: flex; align-items: center; gap: 1px; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
 .message-actions.align-right { justify-content: flex-end; }
-.message-row:hover > .message-actions, .message-actions:focus-within { opacity: 1; pointer-events: auto; }
+.message-row:hover .message-actions, .message-actions:focus-within { opacity: 1; pointer-events: auto; }
 .message-actions button { width: 23px; height: 22px; display: grid; place-items: center; padding: 0; color: #f1e7de55; background: transparent; border: 0; border-radius: 4px; }
 .message-actions button:hover { color: #f1e7debb; background: #ffffff0a; }
 .message-edit { width: min(520px, 70vw); }

@@ -148,11 +148,13 @@ export function MessageBubble({ message, toolCalls, generating, latestUser, onRe
             )}
           </>
         )}
-        {canCollapse && <button type="button" className="message-collapse" aria-expanded={!collapsed} onClick={() => setCollapsed((value) => !value)}>{collapsed ? 'Expand' : 'Collapse'}</button>}
       </div>
       {message.error && <div className="message-error"><span>{message.error.message}</span></div>}
       {message.status === 'cancelled' && <div className="message-status">Stopped</div>}
-      <MessageActions actions={actions} align="left" />
+      <div className="message-controls">
+        <MessageActions actions={actions} align="left" />
+        {canCollapse && <button type="button" className="message-collapse" aria-expanded={!collapsed} onClick={() => setCollapsed((value) => !value)}>{collapsed ? 'Expand' : 'Collapse'}</button>}
+      </div>
     </article>
   );
 }

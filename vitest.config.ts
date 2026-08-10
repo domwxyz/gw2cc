@@ -18,7 +18,7 @@ export default defineConfig({
       {
         test: {
           name: 'packages',
-          include: ['packages/**/*.test.ts'],
+          include: ['packages/**/*.test.ts', 'apps/desktop/electron/**/*.test.ts'],
           environment: 'node'
         }
       },
