@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { InMemorySecretStore, type AccountRepository, type AccountStateRecord, type Gw2Gateway, type QueryValue } from '@gw2cc/core';
+import { describe, expect, it, vi } from 'vitest';
+import { Gw2ccError, InMemorySecretStore, type AccountRepository, type AccountStateRecord, type Gw2Gateway, type QueryValue } from '@gw2cc/core';
 import { FixtureGw2Gateway } from '@gw2cc/gw2';
 import { Gw2ToolExecutor } from './gw2-tools';
 
@@ -21,6 +21,40 @@ function executor(gateway: Gw2Gateway = new FixtureGw2Gateway(), accountReposito
   return new Gw2ToolExecutor(gateway, new InMemorySecretStore('fixture-key', true), accountRepository);
 }
 
+function mockGateway(routes: Record<string, unknown | Error>): {
+  gateway: Gw2Gateway;
+  getMock: ReturnType<typeof vi.fn>;
+} {
+  const fixture = new FixtureGw2Gateway();
+  const getMock = vi.fn(async (_key: string, path: `/v2/${string}`) => {
+    const response = routes[path];
+    if (response instanceof Error) throw response;
+    if (!(path in routes)) throw new Error(`Unexpected mock GW2 route: ${path}`);
+    return response;
+  });
+  const gateway: Gw2Gateway = {
+    fixtureMode: true,
+    validateKey: (key) => fixture.validateKey(key),
+    getCharacterSnapshot: (key, name, refresh, signal) => fixture.getCharacterSnapshot(key, name, refresh, signal),
+    get: async <T>(key: string, path: `/v2/${string}`) => getMock(key, path) as Promise<T>
+  };
+  return { gateway, getMock };
+}
+
+const dailyRoutes: Record<string, unknown> = {
+  '/v2/achievements/daily': { pve: [{ id: 101 }, { id: 102 }] },
+  '/v2/achievements': [
+    { id: 101, name: 'Daily Kryta Vista Viewer' },
+    { id: 102, name: 'Daily Fractal Adept' }
+  ],
+  '/v2/account/achievements': [{ id: 101, current: 1, max: 1, done: true }],
+  '/v2/account/worldbosses': ['behemoth'],
+  '/v2/account/dungeons': ['ac_story'],
+  '/v2/account/dailycrafting': ['charged_quartz_crystal'],
+  '/v2/account/raids': ['vale_guardian'],
+  '/v2/account/mapchests': ['auric_basin_heros_choice_chest']
+};
+
 describe('bounded read-only GW2 tool registry', () => {
   it('registers the complete GW2 tool surface and reuses AttributeReport', async () => {
     const tools = executor();
@@ -38,9 +72,14 @@ describe('bounded read-only GW2 tool registry', () => {
       'gw2_get_character_inventory',
       'gw2_get_wallet',
       'gw2_get_achievements',
+      'gw2_get_daily_status',
       'gw2_get_materials',
       'gw2_get_v2'
     ]);
+    expect(tools.definitions().find((tool) => tool.name === 'gw2_get_account')?.description)
+      .toContain('progression context');
+    expect(tools.definitions().find((tool) => tool.name === 'gw2_get_v2')?.description)
+      .toContain('Never tell the user an ArenaNet endpoint is unavailable without attempting it through gw2_get_v2.');
     const result = await tools.execute(
       { id: 'call-1', name: 'gw2_get_character_attributes', arguments: {} },
       { focusedCharacterName: 'Aurelia Ward', signal: new AbortController().signal }
@@ -210,5 +249,157 @@ describe('bounded read-only GW2 tool registry', () => {
     expect(queries[4]).toMatchObject({ page: 0, page_size: 25 });
     expect(queries[4]).not.toHaveProperty('ids');
     expect(all).toMatchObject({ value: { data: { pagination: { translatedFromIdsAll: true } } } });
+  });
+
+  it('passes through the extended raw account progression fields', async () => {
+    const { gateway } = mockGateway({
+      '/v2/account': {
+        id: 'account-id',
+        name: 'Commander.1234',
+        world: 1001,
+        access: ['GuildWars2', 'HeartOfThorns'],
+        fractal_level: 47,
+        daily_ap: 15_001,
+        monthly_ap: 500,
+        commander: true,
+        created: '2012-08-25T00:00:00Z',
+        age: 4_000_000,
+        wvw: { rank: 321, team_id: 11001 },
+        guilds: ['guild-one', 'guild-two'],
+        guild_leader: ['guild-one'],
+        build_storage_slots: 8
+      }
+    });
+    const result = await executor(gateway).execute(
+      { id: 'account-progression', name: 'gw2_get_account', arguments: {} },
+      { signal: new AbortController().signal }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        data: {
+          provenance: { kind: 'arenanet_api', endpoint: '/v2/account' },
+          account: {
+            id: 'account-id',
+            name: 'Commander.1234',
+            worldId: 1001,
+            access: ['GuildWars2', 'HeartOfThorns'],
+            fractal_level: 47,
+            daily_ap: 15_001,
+            monthly_ap: 500,
+            commander: true,
+            created: '2012-08-25T00:00:00Z',
+            age: 4_000_000,
+            wvw: { rank: 321, team_id: 11001 },
+            guilds: ['guild-one', 'guild-two'],
+            guild_leader: ['guild-one'],
+            build_storage_slots: 8
+          }
+        }
+      }
+    });
+  });
+
+  it('returns structured section notes for a token with partial permissions', async () => {
+    const restricted: AccountRepository = {
+      getActive: async () => ({ ...account, permissions: ['account'] }),
+      save: async () => {},
+      clearActive: async () => {}
+    };
+    const { gateway, getMock } = mockGateway({ '/v2/achievements/daily': dailyRoutes['/v2/achievements/daily'] });
+    const result = await executor(gateway, restricted).execute(
+      { id: 'daily-partial-permissions', name: 'gw2_get_daily_status', arguments: {} },
+      { signal: new AbortController().signal }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        data: {
+          pve: [],
+          worldBossesKilled: [],
+          dungeonsCompleted: [],
+          dailyCraftingDone: [],
+          raidsCleared: [],
+          mapChests: []
+        }
+      }
+    });
+    const notes = (result.value as any).data.notes;
+    expect(notes).toHaveLength(6);
+    expect(notes.every((note: any) => note.error.code === 'GW2_PERMISSION_MISSING')).toBe(true);
+    expect(getMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks every named PvE daily incomplete for an empty-progress account', async () => {
+    const { gateway } = mockGateway({
+      ...dailyRoutes,
+      '/v2/account/achievements': [],
+      '/v2/account/worldbosses': [],
+      '/v2/account/dungeons': [],
+      '/v2/account/dailycrafting': [],
+      '/v2/account/raids': [],
+      '/v2/account/mapchests': []
+    });
+    const result = await executor(gateway).execute(
+      { id: 'daily-empty-progress', name: 'gw2_get_daily_status', arguments: {} },
+      { signal: new AbortController().signal }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        data: {
+          pve: [
+            { id: 101, name: 'Daily Kryta Vista Viewer', done: false },
+            { id: 102, name: 'Daily Fractal Adept', done: false }
+          ],
+          worldBossesKilled: [],
+          dungeonsCompleted: [],
+          dailyCraftingDone: [],
+          raidsCleared: [],
+          mapChests: [],
+          notes: []
+        }
+      }
+    });
+  });
+
+  it('keeps successful daily sections when one account sub-endpoint fails', async () => {
+    const { gateway } = mockGateway({
+      ...dailyRoutes,
+      '/v2/account/worldbosses': new Gw2ccError(
+        'GW2_UPSTREAM_UNAVAILABLE',
+        'World boss status is temporarily unavailable.',
+        { retryable: true }
+      )
+    });
+    const result = await executor(gateway).execute(
+      { id: 'daily-one-failure', name: 'gw2_get_daily_status', arguments: {} },
+      { signal: new AbortController().signal }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        data: {
+          pve: [
+            { id: 101, name: 'Daily Kryta Vista Viewer', done: true },
+            { id: 102, name: 'Daily Fractal Adept', done: false }
+          ],
+          worldBossesKilled: [],
+          dungeonsCompleted: ['ac_story'],
+          dailyCraftingDone: ['charged_quartz_crystal'],
+          raidsCleared: ['vale_guardian'],
+          mapChests: ['auric_basin_heros_choice_chest'],
+          notes: [{
+            section: 'worldBossesKilled',
+            endpoint: '/v2/account/worldbosses',
+            error: { code: 'GW2_UPSTREAM_UNAVAILABLE', retryable: true }
+          }]
+        }
+      }
+    });
   });
 });

@@ -57,7 +57,21 @@ const v2Schema = z.object({
 const liveAccountSchema = z.object({
   id: z.string(),
   name: z.string(),
-  world: z.number().int().optional()
+  world: z.number().int().optional(),
+  access: z.array(z.string()).optional(),
+  fractal_level: z.number().int().nonnegative().optional(),
+  daily_ap: z.number().int().nonnegative().optional(),
+  monthly_ap: z.number().int().nonnegative().optional(),
+  commander: z.boolean().optional(),
+  created: z.string().optional(),
+  age: z.number().int().nonnegative().optional(),
+  wvw: z.object({
+    rank: z.number().int().nonnegative().optional(),
+    team_id: z.number().int().nonnegative().optional()
+  }).passthrough().optional(),
+  guilds: z.array(z.string()).optional(),
+  guild_leader: z.array(z.string()).optional(),
+  build_storage_slots: z.number().int().nonnegative().optional()
 }).passthrough();
 const liveCharactersSchema = z.array(z.string());
 const accountItemSchema = z.object({
@@ -86,6 +100,13 @@ const achievementSchema = z.object({
   repeated: z.number().optional(),
   bits: z.array(z.number().int()).optional()
 }).passthrough();
+const dailyAchievementSchema = z.object({ id: z.number().int().positive() }).passthrough();
+const dailyAchievementsSchema = z.object({ pve: z.array(dailyAchievementSchema) }).passthrough();
+const achievementDefinitionSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string()
+}).passthrough();
+const stringListSchema = z.array(z.string());
 const characterBagsSchema = z.object({
   bags: z.array(z.object({
     id: z.number().int().positive(),
@@ -118,7 +139,7 @@ const characterInventoryInputSchema = {
 const DEFINITIONS: readonly LlmToolDefinition[] = [
   {
     name: 'gw2_get_account',
-    description: 'Get the connected GW2 account identity and detected API permissions.',
+    description: 'Get the connected GW2 account identity, detected API permissions, and raw ArenaNet account progression context such as access, AP, fractal level, WvW rank, guilds, and account age. The access array is verbatim and may under-report bundle-granted content; do not infer expansion ownership from it.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} }
   },
   {
@@ -188,13 +209,18 @@ const DEFINITIONS: readonly LlmToolDefinition[] = [
     inputSchema: pageInputSchema
   },
   {
+    name: 'gw2_get_daily_status',
+    description: 'Get today\'s named PvE daily achievements with completion state plus today\'s completed world bosses, dungeons, daily crafting, raids, and map chests. Unavailable account sections are reported independently.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
     name: 'gw2_get_materials',
     description: 'Get a bounded page of non-empty account material-storage entries. Requires the GW2 inventories permission.',
     inputSchema: pageInputSchema
   },
   {
     name: 'gw2_get_v2',
-    description: 'Perform a bounded authenticated GET against the fixed ArenaNet host for a clean /v2/ path. Rich resources default to 25 records per page, ids arrays are transparently batched to 25, and every partial response reports how to continue. Omit query and pagination to get an endpoint catalog ID list. No arbitrary hosts, methods, headers, or credentials are accepted.',
+    description: 'Perform a bounded authenticated GET against the fixed ArenaNet host for a clean /v2/ path. Rich resources default to 25 records per page, ids arrays are transparently batched to 25, and every partial response reports how to continue. Omit query and pagination to get an endpoint catalog ID list. No arbitrary hosts, methods, headers, or credentials are accepted. gw2_get_v2 can reach any public or permission-authorized /v2/ path (account details, masteries, crafting, hero points, templates, commerce, etc.).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -263,6 +289,54 @@ function normalizeSlots(slots: Array<z.infer<typeof accountItemSchema> | null>):
   return slots.flatMap((entry, slot) => entry ? [{ slot, ...entry }] : []);
 }
 
+type DailyStatusSection =
+  | 'pve'
+  | 'worldBossesKilled'
+  | 'dungeonsCompleted'
+  | 'dailyCraftingDone'
+  | 'raidsCleared'
+  | 'mapChests';
+
+interface DailySectionResult<T> {
+  data?: T;
+  note?: {
+    section: DailyStatusSection;
+    endpoint: string;
+    error: ReturnType<typeof toErrorPayload>;
+  };
+}
+
+type DailyStatusNote = NonNullable<DailySectionResult<unknown>['note']>;
+
+async function captureDailySection<T>(
+  section: DailyStatusSection,
+  endpoint: `/v2/${string}`,
+  load: () => Promise<T>
+): Promise<DailySectionResult<T>> {
+  try {
+    return { data: await load() };
+  } catch (error) {
+    return { note: { section, endpoint, error: toErrorPayload(error) } };
+  }
+}
+
+function missingProgressionSection<T>(
+  section: DailyStatusSection,
+  endpoint: `/v2/${string}`
+): Promise<DailySectionResult<T>> {
+  return Promise.resolve({
+    note: {
+      section,
+      endpoint,
+      error: toErrorPayload(new Gw2ccError(
+        'GW2_PERMISSION_MISSING',
+        `${section} requires the progression GW2 API key permission.`,
+        { details: { feature: section, requiredPermissions: ['progression'], missingPermissions: ['progression'] } }
+      ))
+    }
+  });
+}
+
 export class Gw2ToolExecutor implements ToolExecutor {
   constructor(
     private readonly gateway: Gw2Gateway,
@@ -327,7 +401,23 @@ export class Gw2ToolExecutor implements ToolExecutor {
             account: {
               id: liveAccount.id,
               name: liveAccount.name,
-              ...(liveAccount.world !== undefined ? { worldId: liveAccount.world } : {})
+              ...(liveAccount.world !== undefined ? { worldId: liveAccount.world } : {}),
+              ...(liveAccount.access !== undefined ? { access: liveAccount.access } : {}),
+              ...(liveAccount.fractal_level !== undefined ? { fractal_level: liveAccount.fractal_level } : {}),
+              ...(liveAccount.daily_ap !== undefined ? { daily_ap: liveAccount.daily_ap } : {}),
+              ...(liveAccount.monthly_ap !== undefined ? { monthly_ap: liveAccount.monthly_ap } : {}),
+              ...(liveAccount.commander !== undefined ? { commander: liveAccount.commander } : {}),
+              ...(liveAccount.created !== undefined ? { created: liveAccount.created } : {}),
+              ...(liveAccount.age !== undefined ? { age: liveAccount.age } : {}),
+              ...(liveAccount.wvw !== undefined ? {
+                wvw: {
+                  ...(liveAccount.wvw.rank !== undefined ? { rank: liveAccount.wvw.rank } : {}),
+                  ...(liveAccount.wvw.team_id !== undefined ? { team_id: liveAccount.wvw.team_id } : {})
+                }
+              } : {}),
+              ...(liveAccount.guilds !== undefined ? { guilds: liveAccount.guilds } : {}),
+              ...(liveAccount.guild_leader !== undefined ? { guild_leader: liveAccount.guild_leader } : {}),
+              ...(liveAccount.build_storage_slots !== undefined ? { build_storage_slots: liveAccount.build_storage_slots } : {})
             },
             permissions: account.permissions,
             selectedCharacterName: account.selectedCharacterName
@@ -432,6 +522,157 @@ export class Gw2ToolExecutor implements ToolExecutor {
           const entries = z.array(achievementSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/achievements', {}, controller.signal));
           const paged = pageResult(entries, input.offset, input.limit);
           return boundToolResult({ source: 'Live ArenaNet account achievements', provenance: arenaNetProvenance('/v2/account/achievements'), ...paged }, `Loaded ${paged.entries.length} achievement records`);
+        }
+        case 'gw2_get_daily_status': {
+          emptySchema.parse(call.arguments);
+          const hasProgression = account.permissions.includes('progression');
+          const dailyPromise = captureDailySection(
+            'pve',
+            '/v2/achievements/daily',
+            async () => dailyAchievementsSchema.parse(
+              await this.gateway.get<unknown>(apiKey, '/v2/achievements/daily', {}, controller.signal)
+            )
+          );
+          const achievementProgressPromise = hasProgression
+            ? captureDailySection(
+                'pve',
+                '/v2/account/achievements',
+                async () => z.array(achievementSchema).parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/account/achievements', {}, controller.signal)
+                )
+              )
+            : missingProgressionSection<z.infer<typeof achievementSchema>[]>('pve', '/v2/account/achievements');
+          const worldBossesPromise = hasProgression
+            ? captureDailySection(
+                'worldBossesKilled',
+                '/v2/account/worldbosses',
+                async () => stringListSchema.parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/account/worldbosses', {}, controller.signal)
+                )
+              )
+            : missingProgressionSection<string[]>('worldBossesKilled', '/v2/account/worldbosses');
+          const dungeonsPromise = hasProgression
+            ? captureDailySection(
+                'dungeonsCompleted',
+                '/v2/account/dungeons',
+                async () => stringListSchema.parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/account/dungeons', {}, controller.signal)
+                )
+              )
+            : missingProgressionSection<string[]>('dungeonsCompleted', '/v2/account/dungeons');
+          const dailyCraftingPromise = hasProgression
+            ? captureDailySection(
+                'dailyCraftingDone',
+                '/v2/account/dailycrafting',
+                async () => stringListSchema.parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/account/dailycrafting', {}, controller.signal)
+                )
+              )
+            : missingProgressionSection<string[]>('dailyCraftingDone', '/v2/account/dailycrafting');
+          const raidsPromise = hasProgression
+            ? captureDailySection(
+                'raidsCleared',
+                '/v2/account/raids',
+                async () => stringListSchema.parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/account/raids', {}, controller.signal)
+                )
+              )
+            : missingProgressionSection<string[]>('raidsCleared', '/v2/account/raids');
+          const mapChestsPromise = hasProgression
+            ? captureDailySection(
+                'mapChests',
+                '/v2/account/mapchests',
+                async () => stringListSchema.parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/account/mapchests', {}, controller.signal)
+                )
+              )
+            : missingProgressionSection<string[]>('mapChests', '/v2/account/mapchests');
+
+          const [daily, achievementProgress, worldBosses, dungeons, dailyCrafting, raids, mapChests] = await Promise.all([
+            dailyPromise,
+            achievementProgressPromise,
+            worldBossesPromise,
+            dungeonsPromise,
+            dailyCraftingPromise,
+            raidsPromise,
+            mapChestsPromise
+          ]);
+          if (controller.signal.aborted) throw new Gw2ccError('CANCELLED', 'Tool execution was cancelled.');
+
+          const notes: DailyStatusNote[] = [];
+          for (const result of [daily, achievementProgress, worldBosses, dungeons, dailyCrafting, raids, mapChests]) {
+            if (result.note) notes.push(result.note);
+          }
+
+          let pve: Array<{ id: number; name: string; done: boolean }> = [];
+          if (daily.data && achievementProgress.data) {
+            const ids = [...new Set(daily.data.pve.map((entry) => entry.id))];
+            const definitions = await captureDailySection(
+              'pve',
+              '/v2/achievements',
+              async () => {
+                const batches: number[][] = [];
+                for (let offset = 0; offset < ids.length; offset += GENERIC_ID_BATCH_SIZE) {
+                  batches.push(ids.slice(offset, offset + GENERIC_ID_BATCH_SIZE));
+                }
+                const responses = await Promise.all(batches.map(async (batch) => z.array(achievementDefinitionSchema).parse(
+                  await this.gateway.get<unknown>(apiKey, '/v2/achievements', { ids: batch }, controller.signal)
+                )));
+                const entries = responses.flat();
+                const returnedIds = new Set(entries.map((entry) => entry.id));
+                const missingIds = ids.filter((id) => !returnedIds.has(id));
+                if (missingIds.length > 0) {
+                  throw new Gw2ccError(
+                    'GW2_UPSTREAM_UNAVAILABLE',
+                    'ArenaNet did not return every requested daily achievement definition.',
+                    { retryable: true, details: { missingIds } }
+                  );
+                }
+                return entries;
+              }
+            );
+            if (controller.signal.aborted) throw new Gw2ccError('CANCELLED', 'Tool execution was cancelled.');
+            if (definitions.note) {
+              notes.push(definitions.note);
+            } else if (definitions.data) {
+              const names = new Map(definitions.data.map((entry) => [entry.id, entry.name]));
+              const doneIds = new Set(
+                achievementProgress.data.filter((entry) => entry.done === true).map((entry) => entry.id)
+              );
+              pve = daily.data.pve.map((entry) => ({
+                id: entry.id,
+                name: names.get(entry.id)!,
+                done: doneIds.has(entry.id)
+              }));
+            }
+          }
+
+          return boundToolResult({
+            source: 'Live ArenaNet daily account status joined by the GW2 tool',
+            provenance: {
+              kind: 'arenanet_api',
+              sourceName: 'Guild Wars 2 v2 API',
+              endpoints: [
+                '/v2/achievements/daily',
+                '/v2/achievements',
+                '/v2/account/achievements',
+                '/v2/account/worldbosses',
+                '/v2/account/dungeons',
+                '/v2/account/dailycrafting',
+                '/v2/account/raids',
+                '/v2/account/mapchests'
+              ]
+            },
+            pve,
+            worldBossesKilled: worldBosses.data ?? [],
+            dungeonsCompleted: dungeons.data ?? [],
+            dailyCraftingDone: dailyCrafting.data ?? [],
+            raidsCleared: raids.data ?? [],
+            mapChests: mapChests.data ?? [],
+            notes
+          }, notes.length > 0
+            ? `Loaded daily GW2 status with ${notes.length} unavailable section${notes.length === 1 ? '' : 's'}`
+            : 'Loaded complete daily GW2 status');
         }
         case 'gw2_get_materials': {
           requirePermission('Material storage', 'inventories');

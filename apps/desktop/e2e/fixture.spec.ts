@@ -110,3 +110,43 @@ test('fixture-mode desktop workflow performs mixed research and persists charact
     await fs.rm(userData, { recursive: true, force: true });
   }
 });
+
+test('long conversations keep every message inside the transcript scroll range', async () => {
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'gw2cc-e2e-scroll-'));
+  let desktop: ElectronApplication | undefined;
+  try {
+    desktop = await launch(userData);
+    const window = await desktop.firstWindow();
+    await window.getByRole('tab', { name: 'Console' }).click();
+
+    for (let turn = 1; turn <= 5; turn += 1) {
+      const expectedMessages = turn * 2;
+      await window.getByRole('textbox', { name: 'Message', exact: true }).fill(`Fixture scroll regression turn ${turn}.`);
+      await window.getByRole('button', { name: 'Send message' }).click();
+      await expect(window.locator('.message-row')).toHaveCount(expectedMessages);
+      await expect(window.getByRole('button', { name: 'Send message' })).toBeVisible();
+    }
+
+    const transcriptMetrics = await window.locator('.chat-transcript').evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      const rows = Array.from(element.querySelectorAll<HTMLElement>('.message-row'));
+      const lastRow = rows.at(-1)!;
+      const transcriptBottom = element.getBoundingClientRect().bottom
+        - Number.parseFloat(getComputedStyle(element).paddingBottom);
+      return {
+        shrinkableRows: rows.filter((row) => getComputedStyle(row).flexShrink !== '0').length,
+        compressedRows: rows.filter((row) => row.scrollHeight > row.clientHeight + 1).length,
+        distanceFromBottom: element.scrollHeight - element.clientHeight - element.scrollTop,
+        hiddenLastRow: lastRow.getBoundingClientRect().bottom - transcriptBottom
+      };
+    });
+
+    expect(transcriptMetrics.shrinkableRows).toBe(0);
+    expect(transcriptMetrics.compressedRows).toBe(0);
+    expect(transcriptMetrics.distanceFromBottom).toBeLessThanOrEqual(1);
+    expect(transcriptMetrics.hiddenLastRow).toBeLessThanOrEqual(1);
+  } finally {
+    await desktop?.close().catch(() => {});
+    await fs.rm(userData, { recursive: true, force: true });
+  }
+});

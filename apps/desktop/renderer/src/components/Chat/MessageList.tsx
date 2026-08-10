@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import type { ConversationDetail } from '@gw2cc/protocol';
 import { MessageBubble } from './MessageBubble';
 
@@ -15,6 +15,7 @@ export interface MessageListProps {
 
 export function MessageList({ conversation, generating, onRetry, onEdit, onFork }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const previousConversationIdRef = useRef<string | undefined>(undefined);
   const previousCountRef = useRef(0);
   const followOutputRef = useRef(true);
   const isNearBottom = useCallback(() => {
@@ -25,16 +26,18 @@ export function MessageList({ conversation, generating, onRetry, onEdit, onFork 
     return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = containerRef.current;
     if (!element) return;
+    const conversationChanged = previousConversationIdRef.current !== conversation.id;
     const messageCountChanged = previousCountRef.current !== conversation.messages.length;
+    previousConversationIdRef.current = conversation.id;
     previousCountRef.current = conversation.messages.length;
-    if (messageCountChanged || followOutputRef.current) {
+    if (conversationChanged || messageCountChanged || followOutputRef.current) {
       element.scrollTop = element.scrollHeight;
       followOutputRef.current = true;
     }
-  }, [conversation.messages, conversation.toolCalls]);
+  }, [conversation.id, conversation.messages, conversation.toolCalls]);
 
   const latestUserId = [...conversation.messages].reverse().find((message) => message.role === 'user')?.id;
   return (

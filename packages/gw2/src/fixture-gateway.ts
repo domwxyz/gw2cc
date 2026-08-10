@@ -223,7 +223,22 @@ export class FixtureGw2Gateway implements Gw2Gateway {
       return item as T;
     }
     const fixtures: Record<string, unknown> = {
-      '/v2/account': { id: 'fixture-account-001', name: 'Fixture Commander.1234', world: 1001 },
+      '/v2/account': {
+        id: 'fixture-account-001',
+        name: 'Fixture Commander.1234',
+        world: 1001,
+        access: ['GuildWars2', 'HeartOfThorns'],
+        fractal_level: 32,
+        daily_ap: 12_345,
+        monthly_ap: 500,
+        commander: true,
+        created: '2012-08-25T00:00:00Z',
+        age: 3_600_000,
+        wvw: { rank: 145, team_id: 11001 },
+        guilds: ['fixture-guild-001'],
+        guild_leader: ['fixture-guild-001'],
+        build_storage_slots: 8
+      },
       '/v2/characters': ['Aurelia Ward', 'Sylvari Ranger'],
       '/v2/characters/Aurelia%20Ward': guardian.character,
       '/v2/characters/Sylvari%20Ranger': ranger.character,
@@ -238,6 +253,16 @@ export class FixtureGw2Gateway implements Gw2Gateway {
         { id: 101, current: 10, max: 10, done: true },
         { id: 102, current: 4, max: 20, done: false }
       ],
+      '/v2/achievements/daily': { pve: [{ id: 101 }, { id: 102 }] },
+      '/v2/achievements': [
+        { id: 101, name: 'Fixture Daily Kryta Vista Viewer' },
+        { id: 102, name: 'Fixture Daily Fractal Adept' }
+      ],
+      '/v2/account/worldbosses': ['fixture_behemoth'],
+      '/v2/account/dungeons': ['fixture_ac_story'],
+      '/v2/account/dailycrafting': ['fixture_charged_quartz_crystal'],
+      '/v2/account/raids': ['fixture_vale_guardian'],
+      '/v2/account/mapchests': ['fixture_auric_basin_heros_choice_chest'],
       '/v2/account/materials': [
         { id: 46731, category: 5, count: 250 },
         { id: 19721, category: 6, count: 0 }
