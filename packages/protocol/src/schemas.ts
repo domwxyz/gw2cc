@@ -13,6 +13,11 @@ const itemAttributeSchema = z.object({
   value: z.number()
 });
 
+const percentageModifierSchema = z.object({
+  attribute: z.enum(['criticalChance', 'conditionDuration', 'boonDuration']),
+  value: z.number()
+});
+
 const itemSummarySchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -21,7 +26,10 @@ const itemSummarySchema = z.object({
   type: z.string().optional(),
   subtype: z.string().optional(),
   description: z.string().optional(),
-  attributes: z.array(itemAttributeSchema)
+  attributes: z.array(itemAttributeSchema),
+  percentageModifiers: z.array(percentageModifierSchema).optional(),
+  attributeBonusTiers: z.array(z.array(itemAttributeSchema)).optional(),
+  percentageModifierBonusTiers: z.array(z.array(percentageModifierSchema)).optional()
 });
 
 export const equippedItemSchema = z.object({

@@ -49,6 +49,25 @@ const ATTRIBUTE_LABELS: Record<AttributeKey, string> = {
   AgonyResistance: 'Agony Resistance'
 };
 
+const PERCENTAGE_MODIFIER_LABELS: Record<string, string> = {
+  criticalChance: 'Critical Chance',
+  conditionDuration: 'Condition Duration',
+  boonDuration: 'Boon Duration'
+};
+
+function modeledUpgradeEffect(upgrade: EquippedItem['upgrades'][number]): string {
+  const effects = [
+    ...upgrade.attributes.map((entry) => `+${entry.value} ${ATTRIBUTE_LABELS[entry.attribute]}`),
+    ...(upgrade.percentageModifiers ?? []).map((entry) =>
+      `+${entry.value}% ${PERCENTAGE_MODIFIER_LABELS[entry.attribute] ?? entry.attribute}`
+    )
+  ];
+  const hasTieredEffects = upgrade.attributeBonusTiers?.some((tier) => tier.length > 0)
+    || upgrade.percentageModifierBonusTiers?.some((tier) => tier.length > 0);
+  if (hasTieredEffects) effects.push('Tiered bonuses included in totals');
+  return effects.join(', ') || 'Effect not numerically modeled';
+}
+
 const SLOT_LABELS: Record<string, string> = {
   Helm: 'Head',
   Shoulders: 'Shoulders',
@@ -310,9 +329,9 @@ function ItemInspector({ item, loading, onWiki }: { item?: EquippedItem; loading
         {item.item.defense !== undefined && <div><dt>Defense</dt><dd>{item.item.defense}</dd></div>}
         {item.item.minPower !== undefined && <div><dt>Weapon strength</dt><dd>{item.item.minPower}–{item.item.maxPower}</dd></div>}
       </dl>
-      {item.attributes.length > 0 && <div className="detail-section"><h4>Direct attributes</h4><ul>{item.attributes.map((attribute) => <li key={attribute.attribute}><span>{ATTRIBUTE_LABELS[attribute.attribute]}</span><b>+{attribute.value}</b></li>)}</ul></div>}
+      {(item.attributes.length > 0 || (item.item.percentageModifiers?.length ?? 0) > 0) && <div className="detail-section"><h4>Direct attributes</h4><ul>{item.attributes.map((attribute) => <li key={attribute.attribute}><span>{ATTRIBUTE_LABELS[attribute.attribute]}</span><b>+{attribute.value}</b></li>)}{item.item.percentageModifiers?.map((modifier) => <li key={modifier.attribute}><span>{PERCENTAGE_MODIFIER_LABELS[modifier.attribute]}</span><b>+{modifier.value}%</b></li>)}</ul></div>}
       {item.skin && <div className="detail-section skin-row"><Icon src={item.skin.icon} name={item.skin.name} /><span><small>Applied skin</small><strong>{item.skin.name}</strong></span></div>}
-      {(item.upgrades.length > 0 || item.infusions.length > 0) && <div className="detail-section"><h4>Upgrades & infusions</h4><ul>{[...item.upgrades, ...item.infusions].map((upgrade, index) => <li key={`${upgrade.id}-${index}`}><span>{upgrade.name}</span><b>{upgrade.attributes.map((entry) => `+${entry.value} ${ATTRIBUTE_LABELS[entry.attribute]}`).join(', ') || 'Effect not numerically modeled'}</b></li>)}</ul></div>}
+      {(item.upgrades.length > 0 || item.infusions.length > 0) && <div className="detail-section"><h4>Upgrades & infusions</h4><ul>{[...item.upgrades, ...item.infusions].map((upgrade, index) => <li key={`${upgrade.id}-${index}`}><span>{upgrade.name}</span><b>{modeledUpgradeEffect(upgrade)}</b></li>)}</ul></div>}
       {item.item.description && <p className="item-description">{item.item.description}</p>}
       <button className="wiki-button" onClick={() => onWiki(item.item.name)}>Open GW2 Wiki search ↗</button>
     </section>

@@ -1,6 +1,10 @@
 import type { EquippedItem, ItemAttribute, ItemDefinition, ItemSummary } from '@gw2cc/core';
 import type { RawEquippedRecord, RawItem, RawItemStat, RawSkin } from './schemas';
 import { attributesFromFormula, normalizeAttributeName } from './stats';
+import {
+  mergeStructuredAndParsedAttributes,
+  parseUnconditionalUpgradeBonuses
+} from './upgrade-attributes';
 
 function plainText(value?: string): string | undefined {
   if (!value) return undefined;
@@ -20,6 +24,10 @@ function structuredAttributes(item: RawItem): ItemAttribute[] {
 }
 
 export function normalizeItem(item: RawItem): ItemDefinition {
+  const attributes = structuredAttributes(item);
+  const relicBonuses = item.type === 'Relic'
+    ? parseUnconditionalUpgradeBonuses(plainText(item.description))
+    : { attributes: [], percentageModifiers: [] };
   return {
     id: item.id,
     name: item.name,
@@ -28,7 +36,10 @@ export function normalizeItem(item: RawItem): ItemDefinition {
     type: item.type,
     ...(item.details?.type ? { subtype: item.details.type } : {}),
     ...(plainText(item.description) ? { description: plainText(item.description) } : {}),
-    attributes: structuredAttributes(item),
+    attributes: mergeStructuredAndParsedAttributes(attributes, relicBonuses.attributes),
+    ...(relicBonuses.percentageModifiers.length > 0
+      ? { percentageModifiers: relicBonuses.percentageModifiers }
+      : {}),
     level: item.level,
     ...(item.chat_link ? { chatLink: item.chat_link } : {}),
     ...(item.details?.defense !== undefined ? { defense: item.details.defense } : {}),
@@ -43,6 +54,13 @@ export function normalizeItem(item: RawItem): ItemDefinition {
 
 export function normalizeUpgrade(item: RawItem): ItemSummary {
   const definition = normalizeItem(item);
+  const buffBonuses = parseUnconditionalUpgradeBonuses(
+    plainText(item.details?.infix_upgrade?.buff?.description)
+  );
+  const attributes = mergeStructuredAndParsedAttributes(definition.attributes, buffBonuses.attributes);
+  const parsedBonusTiers = item.details?.bonuses?.map((bonus) =>
+    parseUnconditionalUpgradeBonuses(plainText(bonus))
+  );
   return {
     id: definition.id,
     name: definition.name,
@@ -51,7 +69,16 @@ export function normalizeUpgrade(item: RawItem): ItemSummary {
     ...(definition.type ? { type: definition.type } : {}),
     ...(definition.subtype ? { subtype: definition.subtype } : {}),
     ...(definition.description ? { description: definition.description } : {}),
-    attributes: definition.attributes
+    attributes,
+    ...(buffBonuses.percentageModifiers.length > 0
+      ? { percentageModifiers: buffBonuses.percentageModifiers }
+      : {}),
+    ...(parsedBonusTiers
+      ? { attributeBonusTiers: parsedBonusTiers.map((tier) => tier.attributes) }
+      : {}),
+    ...(parsedBonusTiers
+      ? { percentageModifierBonusTiers: parsedBonusTiers.map((tier) => tier.percentageModifiers) }
+      : {})
   };
 }
 

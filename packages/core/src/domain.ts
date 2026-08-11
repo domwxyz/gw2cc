@@ -55,6 +55,13 @@ export interface ItemAttribute {
   value: number;
 }
 
+export type PercentageModifierKey = 'criticalChance' | 'conditionDuration' | 'boonDuration';
+
+export interface PercentageModifier {
+  attribute: PercentageModifierKey;
+  value: number;
+}
+
 export interface ItemSummary {
   id: number;
   name: string;
@@ -64,6 +71,9 @@ export interface ItemSummary {
   subtype?: string;
   description?: string;
   attributes: ItemAttribute[];
+  percentageModifiers?: PercentageModifier[];
+  attributeBonusTiers?: ItemAttribute[][];
+  percentageModifierBonusTiers?: PercentageModifier[][];
 }
 
 export interface ItemDefinition extends ItemSummary {

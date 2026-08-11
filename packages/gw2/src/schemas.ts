@@ -91,10 +91,15 @@ export const itemSchema = z.object({
     max_power: z.number().optional(),
     attribute_adjustment: z.number().optional(),
     stat_choices: z.array(z.number()).optional(),
+    bonuses: z.array(z.string()).optional(),
     infix_upgrade: z.object({
       id: z.number().optional(),
+      buff: z.object({
+        skill_id: z.number().optional(),
+        description: z.string().optional()
+      }).passthrough().optional(),
       attributes: z.array(infixAttributeSchema).optional()
-    }).optional()
+    }).passthrough().optional()
   }).passthrough().optional()
 }).passthrough();
 
@@ -153,4 +158,3 @@ export type RawSpecialization = z.infer<typeof specializationSchema>;
 export type RawTrait = z.infer<typeof traitSchema>;
 export type RawSkill = z.infer<typeof skillSchema>;
 export type RawBuildTab = z.infer<typeof buildTabSchema>;
-

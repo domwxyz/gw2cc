@@ -28,7 +28,7 @@ import {
   type RawBuildTab,
   type RawEquippedRecord
 } from './schemas';
-import { calculateAttributes } from './stats';
+import { calculateAttributes, isLandAttributeEquipmentSlot } from './stats';
 
 const PUBLIC_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 200;
@@ -141,12 +141,19 @@ export class LiveGw2Gateway implements Gw2Gateway {
     }
 
     const itemIds = new Set<number>();
+    const attributeItemIds = new Set<number>();
     const skinIds = new Set<number>();
     for (const record of equipmentRecords) {
       itemIds.add(record.id);
       for (const id of record.upgrades ?? []) itemIds.add(id);
       for (const id of record.infusions ?? []) itemIds.add(id);
       if (record.skin !== undefined) skinIds.add(record.skin);
+
+      if (isLandAttributeEquipmentSlot(record.slot)) {
+        attributeItemIds.add(record.id);
+        for (const id of record.upgrades ?? []) attributeItemIds.add(id);
+        for (const id of record.infusions ?? []) attributeItemIds.add(id);
+      }
     }
     const [items, skins] = await Promise.all([
       this.loadMany('items', '/v2/items', itemIds, itemSchema, forceRefresh, signal),
@@ -167,17 +174,22 @@ export class LiveGw2Gateway implements Gw2Gateway {
       signal
     );
 
-    const missingItemIds = [...itemIds].filter((id) => !items.has(id));
+    const missingAttributeItemIds = [...attributeItemIds].filter((id) => !items.has(id));
     const equipment = equipmentRecords.flatMap((record) => {
       const item = items.get(record.id);
       return item ? [resolveEquippedItem(record, item, { itemStats, items, skins })] : [];
     });
     const statBearingTypes = new Set(['Armor', 'Weapon', 'Trinket', 'Back']);
     const unresolvedStats = equipment.some(
-      (entry) => entry.item.level > 0 && statBearingTypes.has(entry.item.type ?? '') && entry.statSource === 'none'
+      (entry) => isLandAttributeEquipmentSlot(entry.slot)
+        && entry.item.level > 0
+        && statBearingTypes.has(entry.item.type ?? '')
+        && entry.statSource === 'none'
     );
     const omissions: string[] = [];
-    if (missingItemIds.length > 0) omissions.push(`${missingItemIds.length} item definition(s) could not be resolved.`);
+    if (missingAttributeItemIds.length > 0) {
+      omissions.push(`${missingAttributeItemIds.length} attribute-contributing item definition(s) could not be resolved.`);
+    }
     if (unresolvedStats) omissions.push('At least one equipped item had no resolvable structured stat data.');
 
     const build = buildTab
@@ -191,7 +203,7 @@ export class LiveGw2Gateway implements Gw2Gateway {
       profession: core.profession,
       equipment,
       omissions,
-      unresolved: missingItemIds.length > 0 || unresolvedStats || equipmentRecords.length === 0
+      unresolved: missingAttributeItemIds.length > 0 || unresolvedStats || attributeItemIds.size === 0
     });
 
     return {

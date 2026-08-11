@@ -263,8 +263,20 @@ function compactEquipment(snapshot: CharacterSnapshot): unknown {
     statName: entry.statName,
     statSource: entry.statSource,
     attributes: entry.attributes,
-    upgrades: entry.upgrades.map((upgrade) => ({ id: upgrade.id, name: upgrade.name, attributes: upgrade.attributes })),
-    infusions: entry.infusions.map((infusion) => ({ id: infusion.id, name: infusion.name, attributes: infusion.attributes }))
+    upgrades: entry.upgrades.map((upgrade) => ({
+      id: upgrade.id,
+      name: upgrade.name,
+      attributes: upgrade.attributes,
+      percentageModifiers: upgrade.percentageModifiers,
+      attributeBonusTiers: upgrade.attributeBonusTiers,
+      percentageModifierBonusTiers: upgrade.percentageModifierBonusTiers
+    })),
+    infusions: entry.infusions.map((infusion) => ({
+      id: infusion.id,
+      name: infusion.name,
+      attributes: infusion.attributes,
+      percentageModifiers: infusion.percentageModifiers
+    }))
   }));
 }
 

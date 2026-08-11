@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveEquippedItem } from './normalize';
+import { normalizeItem, normalizeUpgrade, resolveEquippedItem } from './normalize';
 import type { RawItem, RawItemStat } from './schemas';
 
 const baseItem: RawItem = {
@@ -55,5 +55,57 @@ describe('equipment normalization and precedence', () => {
     );
     expect(formula.statSource).toBe('formula');
     expect(formula.attributes).toEqual([{ attribute: 'Precision', value: 85 }]);
+  });
+
+  it('normalizes rune tiers, unconditional sigil text, and relic core attributes', () => {
+    const rune: RawItem = {
+      id: 24836,
+      name: 'Superior Rune of the Scholar',
+      type: 'UpgradeComponent',
+      rarity: 'Exotic',
+      level: 60,
+      details: {
+        type: 'Rune',
+        bonuses: ['+25 Power', '+35 Ferocity', '+50 Power', '+65 Ferocity', '+100 Power', '+125 Ferocity'],
+        infix_upgrade: { id: 112, attributes: [] }
+      }
+    };
+    const sigil: RawItem = {
+      id: 900,
+      name: 'Static Test Sigil',
+      type: 'UpgradeComponent',
+      rarity: 'Exotic',
+      level: 60,
+      details: {
+        type: 'Sigil',
+        infix_upgrade: {
+          id: 901,
+          buff: { description: '+25 Power, +10 Precision, and +7% Critical Chance' },
+          attributes: [{ attribute: 'Power', modifier: 25 }]
+        }
+      }
+    };
+    const relic: RawItem = {
+      id: 1000,
+      name: 'Static Test Relic',
+      description: '+15 Vitality',
+      type: 'Relic',
+      rarity: 'Exotic',
+      level: 60
+    };
+
+    expect(normalizeUpgrade(rune).attributeBonusTiers?.slice(0, 3)).toEqual([
+      [{ attribute: 'Power', value: 25 }],
+      [{ attribute: 'Ferocity', value: 35 }],
+      [{ attribute: 'Power', value: 50 }]
+    ]);
+    expect(normalizeUpgrade(sigil).attributes).toEqual([
+      { attribute: 'Power', value: 25 },
+      { attribute: 'Precision', value: 10 }
+    ]);
+    expect(normalizeUpgrade(sigil).percentageModifiers).toEqual([
+      { attribute: 'criticalChance', value: 7 }
+    ]);
+    expect(normalizeItem(relic).attributes).toEqual([{ attribute: 'Vitality', value: 15 }]);
   });
 });

@@ -17,8 +17,16 @@ const rune: ItemSummary = {
   rarity: 'Exotic',
   type: 'UpgradeComponent',
   subtype: 'Rune',
-  description: 'Fixture rune with one structured unconditional contribution.',
-  attributes: [{ attribute: 'Power', value: 25 }]
+  description: 'Fixture rune with deterministic tiered unconditional contributions.',
+  attributes: [],
+  attributeBonusTiers: [
+    [{ attribute: 'Power', value: 25 }],
+    [{ attribute: 'Ferocity', value: 35 }],
+    [{ attribute: 'Power', value: 50 }],
+    [{ attribute: 'Ferocity', value: 65 }],
+    [{ attribute: 'Power', value: 100 }],
+    [{ attribute: 'Ferocity', value: 125 }]
+  ]
 };
 
 const infusion: ItemSummary = {
