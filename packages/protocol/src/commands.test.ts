@@ -23,6 +23,7 @@ function createHarness() {
       new WebResearchToolExecutor(research)
     ]),
     research,
+    timeZone: 'UTC',
     clock: { now: () => 123 }
   });
   const openExternal = vi.fn(async () => {});

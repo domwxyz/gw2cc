@@ -2,7 +2,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { createGw2ccApplication, InMemorySecretStore, ResearchService, type Gw2ccApplication } from '@gw2cc/core';
-import { FixtureGw2Gateway, Gw2HttpClient, LiveGw2Gateway } from '@gw2cc/gw2';
+import {
+  FixtureGw2EventTimerGateway,
+  FixtureGw2Gateway,
+  Gw2HttpClient,
+  LiveGw2EventTimerGateway,
+  LiveGw2Gateway,
+  WikiEventTimerClient
+} from '@gw2cc/gw2';
 import {
   AnthropicProvider,
   FixtureLlmProvider,
@@ -12,7 +19,12 @@ import {
 } from '@gw2cc/llm';
 import { handleProtocolRequest } from '@gw2cc/protocol';
 import { openSqlite, type OpenSqliteResult } from '@gw2cc/storage';
-import { CompositeToolExecutor, Gw2ToolExecutor, WebResearchToolExecutor } from '@gw2cc/tools';
+import {
+  CompositeToolExecutor,
+  Gw2EventTimerToolExecutor,
+  Gw2ToolExecutor,
+  WebResearchToolExecutor
+} from '@gw2cc/tools';
 import { FixtureResearchGateway, LiveResearchGateway, SafePageFetcher, TavilyClient } from '@gw2cc/web';
 import { ElectronSecretStore } from './secret-store';
 import { createPinnedWebNetworking, type PinnedWebNetworking } from './pinned-web-fetch';
@@ -21,6 +33,7 @@ import { installContextMenu } from './context-menu';
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const applicationId = 'com.gw2cc.desktop';
 const fixtureMode = process.env.GW2CC_FIXTURE_MODE === '1';
+const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const e2eUserData = process.env.GW2CC_E2E_USER_DATA;
 if (e2eUserData) app.setPath('userData', e2eUserData);
 if (process.platform === 'win32') app.setAppUserModelId(applicationId);
@@ -50,6 +63,12 @@ async function buildApplication(): Promise<Gw2ccApplication> {
         })
       );
   const research = new ResearchService(researchGateway, secrets);
+  const eventTimers = fixtureMode
+    ? new FixtureGw2EventTimerGateway()
+    : new LiveGw2EventTimerGateway(
+        new WikiEventTimerClient({ fetch: globalThis.fetch }),
+        storage.repositories.cache
+      );
   const llmProviders = new StaticLlmProviderRegistry([
     new OpenAiCompatibleProvider('openrouter', globalThis.fetch, 'https://openrouter.ai/api/v1'),
     new OpenAiCompatibleProvider('openai-compatible', globalThis.fetch),
@@ -59,6 +78,7 @@ async function buildApplication(): Promise<Gw2ccApplication> {
   ]);
   const tools = new CompositeToolExecutor([
     new Gw2ToolExecutor(gateway, secrets, storage.repositories.account),
+    new Gw2EventTimerToolExecutor(eventTimers),
     new WebResearchToolExecutor(research)
   ]);
   if (fixtureMode) {
@@ -92,6 +112,7 @@ async function buildApplication(): Promise<Gw2ccApplication> {
     secrets,
     llmProviders,
     tools,
+    timeZone: localTimeZone,
     research
   });
 }

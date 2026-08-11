@@ -230,6 +230,7 @@ export interface PromptAssemblyInput {
 
 export interface ToolExecutionContext {
   focusedCharacterName?: string;
+  timeZone: string;
   signal: AbortSignal;
 }
 

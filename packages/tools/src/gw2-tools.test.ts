@@ -94,7 +94,7 @@ describe('bounded read-only GW2 tool registry', () => {
       .toContain('Never tell the user an ArenaNet endpoint is unavailable without attempting it through gw2_get_v2.');
     const result = await tools.execute(
       { id: 'call-1', name: 'gw2_get_character_attributes', arguments: {} },
-      { focusedCharacterName: 'Aurelia Ward', signal: new AbortController().signal }
+      { focusedCharacterName: 'Aurelia Ward', timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(result).toMatchObject({
       ok: true,
@@ -106,19 +106,19 @@ describe('bounded read-only GW2 tool registry', () => {
     const tools = executor();
     const unsafe = await tools.execute(
       { id: 'call-2', name: 'gw2_get_v2', arguments: { path: 'https://evil.example/v2/account', query: {} } },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(unsafe).toMatchObject({ ok: false, value: { ok: false, error: { code: 'VALIDATION_ERROR' } } });
 
     const extra = await tools.execute(
       { id: 'call-3', name: 'gw2_get_account', arguments: { apiKey: 'must-not-pass' } },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(extra).toMatchObject({ ok: false, value: { error: { code: 'VALIDATION_ERROR' } } });
 
     const missing = await tools.execute(
       { id: 'call-4', name: 'gw2_get_character', arguments: { name: 'Not On Account' } },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(missing).toMatchObject({ ok: false, value: { error: { code: 'GW2_RESOURCE_NOT_FOUND' } } });
   });
@@ -139,15 +139,15 @@ describe('bounded read-only GW2 tool registry', () => {
 
     const item = await tools.execute(
       { id: 'public-item', name: 'gw2_get_item', arguments: { id: 1001 } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     const items = await tools.execute(
       { id: 'public-items', name: 'gw2_get_items', arguments: { ids: [1001, 1002] } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     const generic = await tools.execute(
       { id: 'public-v2', name: 'gw2_get_v2', arguments: { path: '/v2/items/1001' } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
 
     expect(item).toMatchObject({ ok: true, value: { data: { item: { id: 1001 } } } });
@@ -171,15 +171,15 @@ describe('bounded read-only GW2 tool registry', () => {
 
     const accountResult = await tools.execute(
       { id: 'disconnected-account', name: 'gw2_get_account', arguments: {} },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     const bankResult = await tools.execute(
       { id: 'disconnected-bank', name: 'gw2_get_bank', arguments: {} },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     const genericAccountResult = await tools.execute(
       { id: 'disconnected-v2-account', name: 'gw2_get_v2', arguments: { path: '/v2/account' } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
 
     expect(accountResult).toMatchObject({ ok: false, value: { error: { code: 'GW2_NOT_CONNECTED' } } });
@@ -211,7 +211,7 @@ describe('bounded read-only GW2 tool registry', () => {
 
     const result = await tools.execute(
       { id: 'authenticated-v2', name: 'gw2_get_v2', arguments: { path: '/v2/account' } },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
 
     expect(result).toMatchObject({ ok: true, value: { data: { result: { id: 'account-id' } } } });
@@ -229,7 +229,7 @@ describe('bounded read-only GW2 tool registry', () => {
     const tools = executor(oversized);
     const large = await tools.execute(
       { id: 'call-5', name: 'gw2_get_v2', arguments: { path: '/v2/account', query: {} } },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(large).toMatchObject({ ok: true, truncated: true, value: { ok: true, truncation: { truncated: true } } });
     expect(() => JSON.parse(JSON.stringify(large.value))).not.toThrow();
@@ -238,7 +238,7 @@ describe('bounded read-only GW2 tool registry', () => {
     controller.abort();
     const cancelled = await tools.execute(
       { id: 'call-6', name: 'gw2_get_account', arguments: {} },
-      { signal: controller.signal }
+      { timeZone: 'UTC', signal: controller.signal }
     );
     expect(cancelled).toMatchObject({ ok: false, value: { error: { code: 'CANCELLED' } } });
   });
@@ -247,7 +247,7 @@ describe('bounded read-only GW2 tool registry', () => {
     const tools = executor();
     const bank = await tools.execute(
       { id: 'call-bank', name: 'gw2_get_bank', arguments: { limit: 10 } },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(bank).toMatchObject({
       ok: true,
@@ -262,7 +262,7 @@ describe('bounded read-only GW2 tool registry', () => {
     };
     const denied = await executor(new FixtureGw2Gateway(), restricted).execute(
       { id: 'call-bank-denied', name: 'gw2_get_bank', arguments: {} },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(denied).toMatchObject({
       ok: false,
@@ -287,7 +287,7 @@ describe('bounded read-only GW2 tool registry', () => {
         name: 'gw2_get_v2',
         arguments: { path: '/v2/commerce/prices', pagination: { mode: 'all', pageSize: 2, maxPages: 3 } }
       },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
     expect(calls).toBe(2);
     expect(paged).toMatchObject({ value: { data: { pagination: { pagesFetched: 2, complete: true, returned: 3 } } } });
@@ -312,14 +312,14 @@ describe('bounded read-only GW2 tool registry', () => {
 
     const catalog = await tools.execute(
       { id: 'catalog', name: 'gw2_get_v2', arguments: { path: '/v2/quests' } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     expect(queries[0]).toEqual({});
     expect(catalog).toMatchObject({ value: { data: { result: [101, 102, 103] } } });
 
     const page = await tools.execute(
       { id: 'page-zero', name: 'gw2_get_v2', arguments: { path: '/v2/quests', pagination: { page: 0 } } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     expect(queries[1]).toMatchObject({ page: 0, page_size: 25 });
     expect(page).toMatchObject({
@@ -329,7 +329,7 @@ describe('bounded read-only GW2 tool registry', () => {
     const ids = Array.from({ length: 30 }, (_, index) => index + 1);
     const batch = await tools.execute(
       { id: 'id-batch', name: 'gw2_get_v2', arguments: { path: '/v2/quests', query: { ids } } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     expect(queries[2]!.ids).toEqual(ids.slice(0, 25));
     expect(batch).toMatchObject({
@@ -342,7 +342,7 @@ describe('bounded read-only GW2 tool registry', () => {
         name: 'gw2_get_v2',
         arguments: { path: '/v2/quests', query: { ids }, pagination: { page: 1 } }
       },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     expect(queries[3]!.ids).toEqual(ids.slice(25));
     expect(nextBatch).toMatchObject({
@@ -351,7 +351,7 @@ describe('bounded read-only GW2 tool registry', () => {
 
     const all = await tools.execute(
       { id: 'ids-all', name: 'gw2_get_v2', arguments: { path: '/v2/quests', query: { ids: 'all' } } },
-      { signal }
+      { timeZone: 'UTC', signal }
     );
     expect(queries[4]).toMatchObject({ page: 0, page_size: 25 });
     expect(queries[4]).not.toHaveProperty('ids');
@@ -379,7 +379,7 @@ describe('bounded read-only GW2 tool registry', () => {
     });
     const result = await executor(gateway).execute(
       { id: 'account-progression', name: 'gw2_get_account', arguments: {} },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
 
     expect(result).toMatchObject({
@@ -417,7 +417,7 @@ describe('bounded read-only GW2 tool registry', () => {
     const { gateway, getMock } = mockGateway({ '/v2/achievements/daily': dailyRoutes['/v2/achievements/daily'] });
     const result = await executor(gateway, restricted).execute(
       { id: 'daily-partial-permissions', name: 'gw2_get_daily_status', arguments: {} },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
 
     expect(result).toMatchObject({
@@ -451,7 +451,7 @@ describe('bounded read-only GW2 tool registry', () => {
     });
     const result = await executor(gateway).execute(
       { id: 'daily-empty-progress', name: 'gw2_get_daily_status', arguments: {} },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
 
     expect(result).toMatchObject({
@@ -484,7 +484,7 @@ describe('bounded read-only GW2 tool registry', () => {
     });
     const result = await executor(gateway).execute(
       { id: 'daily-one-failure', name: 'gw2_get_daily_status', arguments: {} },
-      { signal: new AbortController().signal }
+      { timeZone: 'UTC', signal: new AbortController().signal }
     );
 
     expect(result).toMatchObject({

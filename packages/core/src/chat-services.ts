@@ -485,6 +485,7 @@ export class ChatService {
     private readonly context: ContextService,
     private readonly accounts: AccountRepository,
     private readonly clock: Clock,
+    private readonly timeZone: string,
     private readonly createId: () => string
   ) {}
 
@@ -777,6 +778,7 @@ export class ChatService {
           this.emit({ type: 'chat.toolStarted', runId: input.runId, messageId: assistant.id, toolCall: persisted });
           const outcome = normalizeToolOutcome(await this.tools.execute(call, {
             ...(input.focus ? { focusedCharacterName: input.focus } : {}),
+            timeZone: this.timeZone,
             signal: input.controller.signal
           }));
           const completed: PersistedToolCall = {

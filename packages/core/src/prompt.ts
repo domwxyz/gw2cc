@@ -120,7 +120,10 @@ function frameAttachment(attachment: ConversationAttachment): string {
 }
 
 export function frameToolResult(toolName: string, value: unknown): string {
-  const external = toolName === 'web_search' || toolName === 'fetch_url' || toolName === 'gw2_wiki_search';
+  const external = toolName === 'web_search' ||
+    toolName === 'fetch_url' ||
+    toolName === 'gw2_wiki_search' ||
+    toolName === 'gw2_get_event_timers';
   return JSON.stringify({
     sourceBoundary: external
       ? {

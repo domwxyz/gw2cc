@@ -22,6 +22,7 @@ export function createGw2ccApplication(dependencies: {
   llmProviders: LlmProviderRegistry;
   tools: ToolExecutor;
   clock?: Clock;
+  timeZone: string;
   createId?: () => string;
   research: ResearchService;
 }): Gw2ccApplication {
@@ -64,6 +65,7 @@ export function createGw2ccApplication(dependencies: {
     context,
     dependencies.repositories.account,
     clock,
+    dependencies.timeZone,
     createId
   );
   return new Gw2ccApplication({

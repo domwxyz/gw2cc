@@ -27,7 +27,7 @@ function waitForTerminal(subscribe: (listener: (event: Gw2ccEvent) => void) => (
   });
 }
 
-function createHarness(provider: LlmProvider, tools?: ToolExecutor) {
+function createHarness(provider: LlmProvider, tools?: ToolExecutor, timeZone = 'UTC') {
   const storage = openSqlite(':memory:');
   const gw2 = new FixtureGw2Gateway();
   const secrets = new InMemorySecretStore('fixture-key', true);
@@ -40,6 +40,7 @@ function createHarness(provider: LlmProvider, tools?: ToolExecutor) {
     llmProviders: { get: (providerId) => providerId === 'fixture' ? provider : undefined },
     tools: tools ?? new Gw2ToolExecutor(gw2, secrets, storage.repositories.account),
     research,
+    timeZone,
     clock: { now: () => ++now },
     createId: ids()
   });
@@ -115,6 +116,27 @@ describe('ChatService bounded orchestration', () => {
       expect(after.id).toBe(before);
       expect(after.messages.at(-2)).toMatchObject({ role: 'user', focusedCharacterName: 'Sylvari Ranger' });
       unsubscribe();
+    } finally {
+      harness.storage.close();
+    }
+  });
+
+  it('propagates the application-injected IANA timezone to tool execution context', async () => {
+    let receivedTimeZone: string | undefined;
+    const tools: ToolExecutor = {
+      definitions: () => [],
+      execute: async (_call, context) => {
+        receivedTimeZone = context.timeZone;
+        return { ok: true, value: { inspected: true }, summary: 'inspected', truncated: false };
+      }
+    };
+    const harness = createHarness(new ToolThenAnswerProvider(), tools, 'America/Chicago');
+    try {
+      await harness.application.bootstrap(true);
+      const terminalPromise = waitForTerminal((listener) => harness.application.chat.subscribe(listener));
+      await harness.application.chat.send('Inspect timezone context.');
+      await terminalPromise;
+      expect(receivedTimeZone).toBe('America/Chicago');
     } finally {
       harness.storage.close();
     }
