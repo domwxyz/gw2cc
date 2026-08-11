@@ -31,6 +31,16 @@ describe('GW2 HTTP client', () => {
     });
   });
 
+  it('reports authentication-required responses as disconnected when no key was sent', async () => {
+    const unauthorized = new Gw2HttpClient({
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 401 }))
+    });
+    await expect(unauthorized.get('/v2/account')).rejects.toMatchObject({
+      code: 'GW2_NOT_CONNECTED',
+      message: expect.stringContaining('requires a connected API key')
+    });
+  });
+
   it('does not allow callers to override the pinned schema or inject credentials through query data', async () => {
     const client = new Gw2HttpClient({ fetch: vi.fn<typeof fetch>() });
     await expect(client.get('/v2/account', 'internal-key', { v: 'latest' }))

@@ -206,9 +206,16 @@ export class FixtureGw2Gateway implements Gw2Gateway {
     throw new Gw2ccError('GW2_RESOURCE_NOT_FOUND', `No fixture character named ${characterName}.`);
   }
 
-  async get<T>(_apiKey: string, path: `/v2/${string}`, query: Record<string, QueryValue> = {}, signal?: AbortSignal): Promise<T> {
+  async get<T>(apiKey: string | undefined, path: `/v2/${string}`, query: Record<string, QueryValue> = {}, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new Gw2ccError('CANCELLED', 'Fixture GW2 request was cancelled.');
     validateGw2V2Path(path);
+    if (
+      !apiKey &&
+      (path === '/v2/tokeninfo' || path === '/v2/characters' || path.startsWith('/v2/characters/') ||
+        path === '/v2/account' || path.startsWith('/v2/account/'))
+    ) {
+      throw new Gw2ccError('GW2_NOT_CONNECTED', 'This GW2 API endpoint requires a connected API key.');
+    }
     const guardian = guardianSnapshot(Date.now());
     const ranger = rangerSnapshot(Date.now());
     const allItems = [...guardian.equipment, ...ranger.equipment].map((entry) => entry.item);

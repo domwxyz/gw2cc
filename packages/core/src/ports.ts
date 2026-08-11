@@ -32,7 +32,7 @@ export interface Gw2Gateway {
   readonly fixtureMode: boolean;
   validateKey(apiKey: string): Promise<ConnectionProfile>;
   getCharacterSnapshot(apiKey: string, characterName: string, forceRefresh?: boolean, signal?: AbortSignal): Promise<CharacterSnapshot>;
-  get<T>(apiKey: string, path: `/v2/${string}`, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<T>;
+  get<T>(apiKey: string | undefined, path: `/v2/${string}`, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<T>;
 }
 
 export type SecretKey =

@@ -109,7 +109,7 @@ export class Gw2HttpClient {
             await this.waitForRetry(attempt, retryAfter, controller.signal);
             continue;
           }
-          await this.throwForResponse(response);
+          await this.throwForResponse(response, Boolean(apiKey));
         }
         const contentLength = Number(response.headers.get('content-length') ?? '0');
         if (contentLength > this.maxResponseBytes) {
@@ -164,7 +164,10 @@ export class Gw2HttpClient {
     return result.data;
   }
 
-  private async throwForResponse(response: Response): Promise<never> {
+  private async throwForResponse(response: Response, authenticated: boolean): Promise<never> {
+    if (!authenticated && (response.status === 401 || response.status === 403)) {
+      throw new Gw2ccError('GW2_NOT_CONNECTED', 'This GW2 API endpoint requires a connected API key.');
+    }
     if (response.status === 401) {
       throw new Gw2ccError('GW2_KEY_INVALID', 'The Guild Wars 2 API key is invalid or expired.');
     }

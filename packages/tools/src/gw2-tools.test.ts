@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Gw2ccError, InMemorySecretStore, type AccountRepository, type AccountStateRecord, type Gw2Gateway, type QueryValue } from '@gw2cc/core';
+import {
+  Gw2ccError,
+  InMemorySecretStore,
+  type AccountRepository,
+  type AccountStateRecord,
+  type Gw2Gateway,
+  type QueryValue,
+  type SecretStore
+} from '@gw2cc/core';
 import { FixtureGw2Gateway } from '@gw2cc/gw2';
 import { Gw2ToolExecutor } from './gw2-tools';
 
@@ -17,8 +25,12 @@ const accounts: AccountRepository = {
   clearActive: async () => {}
 };
 
-function executor(gateway: Gw2Gateway = new FixtureGw2Gateway(), accountRepository: AccountRepository = accounts) {
-  return new Gw2ToolExecutor(gateway, new InMemorySecretStore('fixture-key', true), accountRepository);
+function executor(
+  gateway: Gw2Gateway = new FixtureGw2Gateway(),
+  accountRepository: AccountRepository = accounts,
+  secrets: SecretStore = new InMemorySecretStore('fixture-key', true)
+) {
+  return new Gw2ToolExecutor(gateway, secrets, accountRepository);
 }
 
 function mockGateway(routes: Record<string, unknown | Error>): {
@@ -26,7 +38,7 @@ function mockGateway(routes: Record<string, unknown | Error>): {
   getMock: ReturnType<typeof vi.fn>;
 } {
   const fixture = new FixtureGw2Gateway();
-  const getMock = vi.fn(async (_key: string, path: `/v2/${string}`) => {
+  const getMock = vi.fn(async (_key: string | undefined, path: `/v2/${string}`) => {
     const response = routes[path];
     if (response instanceof Error) throw response;
     if (!(path in routes)) throw new Error(`Unexpected mock GW2 route: ${path}`);
@@ -36,7 +48,7 @@ function mockGateway(routes: Record<string, unknown | Error>): {
     fixtureMode: true,
     validateKey: (key) => fixture.validateKey(key),
     getCharacterSnapshot: (key, name, refresh, signal) => fixture.getCharacterSnapshot(key, name, refresh, signal),
-    get: async <T>(key: string, path: `/v2/${string}`) => getMock(key, path) as Promise<T>
+    get: async <T>(key: string | undefined, path: `/v2/${string}`) => getMock(key, path) as Promise<T>
   };
   return { gateway, getMock };
 }
@@ -111,6 +123,101 @@ describe('bounded read-only GW2 tool registry', () => {
     expect(missing).toMatchObject({ ok: false, value: { error: { code: 'GW2_RESOURCE_NOT_FOUND' } } });
   });
 
+  it('runs public item and generic tools without loading a connected account', async () => {
+    const getActive = vi.fn(async () => null);
+    const disconnectedAccounts: AccountRepository = {
+      getActive,
+      save: async () => {},
+      clearActive: async () => {}
+    };
+    const tools = executor(
+      new FixtureGw2Gateway(),
+      disconnectedAccounts,
+      new InMemorySecretStore(null, true)
+    );
+    const signal = new AbortController().signal;
+
+    const item = await tools.execute(
+      { id: 'public-item', name: 'gw2_get_item', arguments: { id: 1001 } },
+      { signal }
+    );
+    const items = await tools.execute(
+      { id: 'public-items', name: 'gw2_get_items', arguments: { ids: [1001, 1002] } },
+      { signal }
+    );
+    const generic = await tools.execute(
+      { id: 'public-v2', name: 'gw2_get_v2', arguments: { path: '/v2/items/1001' } },
+      { signal }
+    );
+
+    expect(item).toMatchObject({ ok: true, value: { data: { item: { id: 1001 } } } });
+    expect(items).toMatchObject({ ok: true, value: { data: { items: [{ id: 1001 }, { id: 1002 }] } } });
+    expect(generic).toMatchObject({ ok: true, value: { data: { result: { id: 1001 } } } });
+    expect(getActive).not.toHaveBeenCalled();
+  });
+
+  it('keeps account tools protected and reports authenticated generic endpoints when disconnected', async () => {
+    const disconnectedAccounts: AccountRepository = {
+      getActive: async () => null,
+      save: async () => {},
+      clearActive: async () => {}
+    };
+    const tools = executor(
+      new FixtureGw2Gateway(),
+      disconnectedAccounts,
+      new InMemorySecretStore(null, true)
+    );
+    const signal = new AbortController().signal;
+
+    const accountResult = await tools.execute(
+      { id: 'disconnected-account', name: 'gw2_get_account', arguments: {} },
+      { signal }
+    );
+    const bankResult = await tools.execute(
+      { id: 'disconnected-bank', name: 'gw2_get_bank', arguments: {} },
+      { signal }
+    );
+    const genericAccountResult = await tools.execute(
+      { id: 'disconnected-v2-account', name: 'gw2_get_v2', arguments: { path: '/v2/account' } },
+      { signal }
+    );
+
+    expect(accountResult).toMatchObject({ ok: false, value: { error: { code: 'GW2_NOT_CONNECTED' } } });
+    expect(bankResult).toMatchObject({ ok: false, value: { error: { code: 'GW2_NOT_CONNECTED' } } });
+    expect(genericAccountResult).toMatchObject({
+      ok: false,
+      value: { error: { code: 'GW2_NOT_CONNECTED', message: expect.stringContaining('requires a connected API key') } }
+    });
+  });
+
+  it('uses a configured API key for generic requests without requiring an active account', async () => {
+    const fixture = new FixtureGw2Gateway();
+    const getMock = vi.fn(async (key: string | undefined, path: `/v2/${string}`) => {
+      if (key !== 'fixture-key' || path !== '/v2/account') throw new Error('Unexpected generic request.');
+      return { id: 'account-id' };
+    });
+    const gateway: Gw2Gateway = {
+      fixtureMode: true,
+      validateKey: (key) => fixture.validateKey(key),
+      getCharacterSnapshot: (key, name, refresh, signal) => fixture.getCharacterSnapshot(key, name, refresh, signal),
+      get: async <T>(key: string | undefined, path: `/v2/${string}`) => getMock(key, path) as Promise<T>
+    };
+    const disconnectedAccounts: AccountRepository = {
+      getActive: async () => null,
+      save: async () => {},
+      clearActive: async () => {}
+    };
+    const tools = executor(gateway, disconnectedAccounts, new InMemorySecretStore('fixture-key', true));
+
+    const result = await tools.execute(
+      { id: 'authenticated-v2', name: 'gw2_get_v2', arguments: { path: '/v2/account' } },
+      { signal: new AbortController().signal }
+    );
+
+    expect(result).toMatchObject({ ok: true, value: { data: { result: { id: 'account-id' } } } });
+    expect(getMock).toHaveBeenCalledWith('fixture-key', '/v2/account');
+  });
+
   it('marks oversized generic results as valid structured truncation and propagates cancellation', async () => {
     const fixture = new FixtureGw2Gateway();
     const oversized: Gw2Gateway = {
@@ -168,7 +275,7 @@ describe('bounded read-only GW2 tool registry', () => {
       fixtureMode: true,
       validateKey: (key) => fixture.validateKey(key),
       getCharacterSnapshot: (key, name, refresh, signal) => fixture.getCharacterSnapshot(key, name, refresh, signal),
-      get: async <T>(_key: string, _path: `/v2/${string}`, query: Record<string, QueryValue> = {}) => {
+      get: async <T>(_key: string | undefined, _path: `/v2/${string}`, query: Record<string, QueryValue> = {}) => {
         calls += 1;
         const page = Number(query.page ?? 0);
         return (page === 0 ? [{ id: 1 }, { id: 2 }] : [{ id: 3 }]) as T;
@@ -193,7 +300,7 @@ describe('bounded read-only GW2 tool registry', () => {
       fixtureMode: true,
       validateKey: (key) => fixture.validateKey(key),
       getCharacterSnapshot: (key, name, refresh, signal) => fixture.getCharacterSnapshot(key, name, refresh, signal),
-      get: async <T>(_key: string, _path: `/v2/${string}`, query: Record<string, QueryValue> = {}) => {
+      get: async <T>(_key: string | undefined, _path: `/v2/${string}`, query: Record<string, QueryValue> = {}) => {
         queries.push(query);
         if (Array.isArray(query.ids)) return query.ids.map((id) => ({ id, name: `Quest ${id}` })) as T;
         if ('page' in query) return [{ id: Number(query.page) * 100 + 1 }, { id: Number(query.page) * 100 + 2 }] as T;

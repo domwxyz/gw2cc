@@ -2,6 +2,7 @@ import {
   Gw2ccError,
   toErrorPayload,
   type AccountRepository,
+  type AccountStateRecord,
   type CharacterSnapshot,
   type Gw2Gateway,
   type LlmToolCall,
@@ -220,7 +221,7 @@ const DEFINITIONS: readonly LlmToolDefinition[] = [
   },
   {
     name: 'gw2_get_v2',
-    description: 'Perform a bounded authenticated GET against the fixed ArenaNet host for a clean /v2/ path. Rich resources default to 25 records per page, ids arrays are transparently batched to 25, and every partial response reports how to continue. Omit query and pagination to get an endpoint catalog ID list. No arbitrary hosts, methods, headers, or credentials are accepted. gw2_get_v2 can reach any public or permission-authorized /v2/ path (account details, masteries, crafting, hero points, templates, commerce, etc.).',
+    description: 'Perform a bounded GET against the fixed ArenaNet host for a clean /v2/ path. Public endpoints work without a connected account; when a GW2 API key is configured it is attached so permission-authorized endpoints can also be reached. Rich resources default to 25 records per page, ids arrays are transparently batched to 25, and every partial response reports how to continue. Omit query and pagination to get an endpoint catalog ID list. No arbitrary hosts, methods, headers, or credentials are accepted. Never tell the user an ArenaNet endpoint is unavailable without attempting it through gw2_get_v2.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -359,11 +360,7 @@ export class Gw2ToolExecutor implements ToolExecutor {
     }, TOOL_TIMEOUT_MS);
     try {
       if (context.signal.aborted) throw new Gw2ccError('CANCELLED', 'Tool execution was cancelled.');
-      const apiKey = await this.secrets.get('gw2-api-key');
-      if (!apiKey) throw new Gw2ccError('GW2_NOT_CONNECTED', 'Connect a Guild Wars 2 API key before using GW2 tools.');
-      const account = await this.accounts.getActive();
-      if (!account) throw new Gw2ccError('GW2_NOT_CONNECTED', 'No active Guild Wars 2 account is connected.');
-      const resolveName = (input: { name?: string }): string => {
+      const resolveName = (account: AccountStateRecord, input: { name?: string }): string => {
         const name = input.name ?? context.focusedCharacterName ?? account.selectedCharacterName;
         if (!name) throw new Gw2ccError('GW2_RESOURCE_NOT_FOUND', 'No focused character is available for this tool call.');
         if (!account.characterNames.includes(name)) {
@@ -371,7 +368,7 @@ export class Gw2ToolExecutor implements ToolExecutor {
         }
         return name;
       };
-      const requirePermission = (feature: string, ...permissions: string[]) => {
+      const requirePermission = (account: AccountStateRecord, feature: string, ...permissions: string[]) => {
         const available = new Set(account.permissions);
         const missing = permissions.filter((permission) => !available.has(permission));
         if (missing.length > 0) {
@@ -382,16 +379,20 @@ export class Gw2ToolExecutor implements ToolExecutor {
           );
         }
       };
-      const snapshot = async (input: { name?: string }) => this.gateway.getCharacterSnapshot(
-        apiKey,
-        resolveName(input),
-        false,
-        controller.signal
-      );
+      const snapshot = async (input: { name?: string }) => {
+        const { apiKey, account } = await this.requireConnection();
+        return this.gateway.getCharacterSnapshot(
+          apiKey,
+          resolveName(account, input),
+          false,
+          controller.signal
+        );
+      };
 
       switch (call.name) {
         case 'gw2_get_account': {
           emptySchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
           const liveAccount = liveAccountSchema.parse(
             await this.gateway.get<unknown>(apiKey, '/v2/account', {}, controller.signal)
           );
@@ -425,6 +426,7 @@ export class Gw2ToolExecutor implements ToolExecutor {
         }
         case 'gw2_list_characters': {
           emptySchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
           const liveCharacters = liveCharactersSchema.parse(
             await this.gateway.get<unknown>(apiKey, '/v2/characters', {}, controller.signal)
           );
@@ -476,32 +478,35 @@ export class Gw2ToolExecutor implements ToolExecutor {
         }
         case 'gw2_get_item': {
           const input = itemSchema.parse(call.arguments);
-          const data = await this.gateway.get<unknown>(apiKey, `/v2/items/${input.id}`, {}, controller.signal);
+          const data = await this.gateway.get<unknown>(undefined, `/v2/items/${input.id}`, {}, controller.signal);
           return boundToolResult({ source: 'ArenaNet GW2 v2 item definition', provenance: arenaNetProvenance(`/v2/items/${input.id}`), item: data }, `Loaded item ${input.id}`);
         }
         case 'gw2_get_items': {
           const input = itemsSchema.parse(call.arguments);
-          const data = await this.gateway.get<unknown>(apiKey, '/v2/items', { ids: input.ids }, controller.signal);
+          const data = await this.gateway.get<unknown>(undefined, '/v2/items', { ids: input.ids }, controller.signal);
           return boundToolResult({ source: 'ArenaNet GW2 v2 batched item definitions', provenance: arenaNetProvenance('/v2/items'), items: data }, `Loaded ${input.ids.length} items`);
         }
         case 'gw2_get_bank': {
-          requirePermission('Account bank', 'inventories');
           const input = pageSchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
+          requirePermission(account, 'Account bank', 'inventories');
           const slots = accountSlotsSchema.parse(await this.gateway.get<unknown>(apiKey, '/v2/account/bank', {}, controller.signal));
           const paged = pageResult(normalizeSlots(slots), input.offset, input.limit);
           return boundToolResult({ source: 'Live ArenaNet account bank', provenance: arenaNetProvenance('/v2/account/bank'), ...paged }, `Loaded ${paged.entries.length} bank slots`);
         }
         case 'gw2_get_shared_inventory': {
-          requirePermission('Shared inventory', 'inventories');
           const input = pageSchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
+          requirePermission(account, 'Shared inventory', 'inventories');
           const slots = accountSlotsSchema.parse(await this.gateway.get<unknown>(apiKey, '/v2/account/inventory', {}, controller.signal));
           const paged = pageResult(normalizeSlots(slots), input.offset, input.limit);
           return boundToolResult({ source: 'Live ArenaNet shared inventory', provenance: arenaNetProvenance('/v2/account/inventory'), ...paged }, `Loaded ${paged.entries.length} shared inventory slots`);
         }
         case 'gw2_get_character_inventory': {
-          requirePermission('Character inventory', 'inventories');
           const input = characterInventorySchema.parse(call.arguments);
-          const name = resolveName(input);
+          const { apiKey, account } = await this.requireConnection();
+          requirePermission(account, 'Character inventory', 'inventories');
+          const name = resolveName(account, input);
           const path = `/v2/characters/${encodeURIComponent(name)}/inventory` as `/v2/${string}`;
           const bags = characterBagsSchema.parse(await this.gateway.get<unknown>(apiKey, path, {}, controller.signal));
           const flattened = bags.bags.flatMap((bag, bagIndex) => bag
@@ -512,19 +517,22 @@ export class Gw2ToolExecutor implements ToolExecutor {
         }
         case 'gw2_get_wallet': {
           emptySchema.parse(call.arguments);
-          requirePermission('Account wallet', 'wallet');
+          const { apiKey, account } = await this.requireConnection();
+          requirePermission(account, 'Account wallet', 'wallet');
           const entries = z.array(walletSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/wallet', {}, controller.signal));
           return boundToolResult({ source: 'Live ArenaNet account wallet', provenance: arenaNetProvenance('/v2/account/wallet'), entries }, `Loaded ${entries.length} wallet currencies`);
         }
         case 'gw2_get_achievements': {
-          requirePermission('Account achievements', 'progression');
           const input = pageSchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
+          requirePermission(account, 'Account achievements', 'progression');
           const entries = z.array(achievementSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/achievements', {}, controller.signal));
           const paged = pageResult(entries, input.offset, input.limit);
           return boundToolResult({ source: 'Live ArenaNet account achievements', provenance: arenaNetProvenance('/v2/account/achievements'), ...paged }, `Loaded ${paged.entries.length} achievement records`);
         }
         case 'gw2_get_daily_status': {
           emptySchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
           const hasProgression = account.permissions.includes('progression');
           const dailyPromise = captureDailySection(
             'pve',
@@ -675,8 +683,9 @@ export class Gw2ToolExecutor implements ToolExecutor {
             : 'Loaded complete daily GW2 status');
         }
         case 'gw2_get_materials': {
-          requirePermission('Material storage', 'inventories');
           const input = pageSchema.parse(call.arguments);
+          const { apiKey, account } = await this.requireConnection();
+          requirePermission(account, 'Material storage', 'inventories');
           const entries = z.array(materialSchema).parse(await this.gateway.get<unknown>(apiKey, '/v2/account/materials', {}, controller.signal));
           const nonEmpty = entries.filter((entry) => entry.count > 0);
           const paged = pageResult(nonEmpty, input.offset, input.limit);
@@ -690,6 +699,7 @@ export class Gw2ToolExecutor implements ToolExecutor {
             Object.prototype.hasOwnProperty.call(call.arguments, 'pagination')
           );
           const input = v2Schema.parse(call.arguments);
+          const apiKey = (await this.secrets.get('gw2-api-key')) ?? undefined;
           if ('page' in input.query || 'page_size' in input.query) {
             throw new Gw2ccError('VALIDATION_ERROR', 'Use the pagination object instead of page/page_size query keys.');
           }
@@ -839,5 +849,15 @@ export class Gw2ToolExecutor implements ToolExecutor {
       clearTimeout(timeout);
       context.signal.removeEventListener('abort', onAbort);
     }
+  }
+
+  private async requireConnection(): Promise<{ apiKey: string; account: AccountStateRecord }> {
+    const apiKey = await this.secrets.get('gw2-api-key');
+    if (!apiKey) {
+      throw new Gw2ccError('GW2_NOT_CONNECTED', 'Connect a Guild Wars 2 API key before using this GW2 tool.');
+    }
+    const account = await this.accounts.getActive();
+    if (!account) throw new Gw2ccError('GW2_NOT_CONNECTED', 'No active Guild Wars 2 account is connected.');
+    return { apiKey, account };
   }
 }

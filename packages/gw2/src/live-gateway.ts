@@ -215,7 +215,7 @@ export class LiveGw2Gateway implements Gw2Gateway {
     };
   }
 
-  async get<T>(apiKey: string, path: `/v2/${string}`, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<T> {
+  async get<T>(apiKey: string | undefined, path: `/v2/${string}`, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<T> {
     return this.client.get<T>(path, apiKey, query, signal);
   }
 
