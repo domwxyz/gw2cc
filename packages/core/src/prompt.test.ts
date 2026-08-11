@@ -5,6 +5,7 @@ import { assemblePrompt, frameToolResult, GW2CC_SYSTEM_POLICY, redactSensitive }
 describe('compact prompt assembly and secret redaction', () => {
   it('separates policy, user lore, ArenaNet-derived compact context, history focus, and tool availability', async () => {
     const snapshot = await new FixtureGw2Gateway().getCharacterSnapshot('fixture-key', 'Aurelia Ward');
+    const localMessageTime = new Date(2026, 7, 10, 13, 5).getTime();
     const messages = assemblePrompt({
       globalInstructions: 'Be concise and identify assumptions.',
       lore: 'Aurelia protects newer commanders.',
@@ -16,7 +17,7 @@ describe('compact prompt assembly and secret redaction', () => {
         role: 'user',
         content: 'How is this build?',
         focusedCharacterName: 'Aurelia Ward',
-        createdAt: 1,
+        createdAt: localMessageTime,
         status: 'complete'
       }],
       toolsAvailable: true
@@ -24,11 +25,35 @@ describe('compact prompt assembly and secret redaction', () => {
 
     expect(messages.map((message) => message.content).join('\n')).toContain('SOURCE: USER-AUTHORED CHARACTER LORE');
     expect(messages.map((message) => message.content).join('\n')).toContain('ARENANET-DERIVED COMPACT CHARACTER CONTEXT');
+    expect(messages.at(-1)?.content).toMatch(/^\[User local time: 2026-08-10T13:05[+-]\d{2}:\d{2}\]\n/);
     expect(messages.at(-1)?.content).toContain('Character focus when this message was sent: Aurelia Ward');
+    expect(GW2CC_SYSTEM_POLICY).toContain('[User local time: ...]');
     const snapshotMessage = messages.find((message) => message.content.includes('COMPACT CHARACTER CONTEXT'))!;
     expect(snapshotMessage.content).toContain('baseline_estimate');
     expect(snapshotMessage.content).not.toContain('fixture-key');
     expect(snapshotMessage.content.length).toBeLessThan(20_000);
+  });
+
+  it('adds local timestamp metadata only to user messages', () => {
+    const localMessageTime = new Date(2026, 0, 2, 3, 4).getTime();
+    const messages = assemblePrompt({
+      globalInstructions: '',
+      lore: '',
+      history: [
+        {
+          id: 'user-1', conversationId: 'conversation-1', role: 'user', content: 'What time is it?',
+          createdAt: localMessageTime, status: 'complete'
+        },
+        {
+          id: 'assistant-1', conversationId: 'conversation-1', role: 'assistant', content: 'I can use that timestamp.',
+          createdAt: localMessageTime + 1, status: 'complete'
+        }
+      ],
+      toolsAvailable: false
+    });
+
+    expect(messages.at(-2)?.content).toMatch(/^\[User local time: 2026-01-02T03:04[+-]\d{2}:\d{2}\]\nWhat time is it\?$/);
+    expect(messages.at(-1)?.content).toBe('I can use that timestamp.');
   });
 
   it('recursively redacts credential-like fields before persistence or renderer events', () => {

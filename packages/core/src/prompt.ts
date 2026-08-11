@@ -4,6 +4,7 @@ import type { ConversationAttachment, LlmMessage, PromptAssemblyInput } from './
 export const GW2CC_SYSTEM_POLICY = [
   'You are the read-only Guild Wars 2 analysis assistant inside GW2CC.',
   'Treat application policy, user-authored lore, ArenaNet-derived structured data, conversation messages, and tool results as distinct sources.',
+  'Each user message starts with an application-supplied [User local time: ...] line containing the computer clock time in ISO 8601 format at minute precision.',
   'Never claim that calculated attributes exactly match the in-game Hero panel when completeness or omissions say otherwise.',
   'Use only the provided read-only tools. Never imply that you changed GW2CC, the user account, settings, lore, files, or the UI.',
   'Do not ask for, repeat, or expose API keys, authorization values, credentials, or secret-store data.',
@@ -81,15 +82,32 @@ export function assemblePrompt(input: PromptAssemblyInput): LlmMessage[] {
   });
 
   for (const message of input.history.slice(-40)) {
+    const localTime = message.role === 'user'
+      ? `[User local time: ${formatLocalTimestamp(message.createdAt)}]\n`
+      : '';
     const focus = message.focusedCharacterName
       ? `[Character focus when this message was sent: ${message.focusedCharacterName}]\n`
       : '';
     const attachments = message.attachments?.length
       ? `\n\n${message.attachments.map(frameAttachment).join('\n\n')}`
       : '';
-    messages.push({ role: message.role, content: `${focus}${message.content}${attachments}` });
+    messages.push({ role: message.role, content: `${localTime}${focus}${message.content}${attachments}` });
   }
   return messages;
+}
+
+function formatLocalTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+  const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
+  const offsetRemainder = Math.abs(offsetMinutes) % 60;
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`,
+    `${offsetSign}${pad(offsetHours)}:${pad(offsetRemainder)}`
+  ].join('');
 }
 
 function frameAttachment(attachment: ConversationAttachment): string {
