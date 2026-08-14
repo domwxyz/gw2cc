@@ -6,6 +6,8 @@ import {
   type Gw2Gateway,
   type ItemAttribute,
   type ItemSummary,
+  type PublicGw2Definition,
+  type PublicGw2ResourceKind,
   type QueryValue
 } from '@gw2cc/core';
 import { validateGw2V2Path } from './client';
@@ -40,6 +42,41 @@ const infusion: ItemSummary = {
     { attribute: 'AgonyResistance', value: 9 }
   ]
 };
+
+const fixturePublicTraits = [
+  ...[1, 2, 3].flatMap((tier) => [0, 1, 2].map((order) => ({
+    id: 40_000 + tier * 10 + order,
+    name: `Fixture Explosives ${tier}-${order}`,
+    specialization: 6,
+    tier,
+    order
+  }))),
+  ...[1, 2, 3].flatMap((tier) => [0, 1, 2].map((order) => ({
+    id: tier === 3 && order === 1 ? 2052 : 43_000 + tier * 10 + order,
+    name: tier === 3 && order === 1 ? 'Kinetic Accelerators' : `Fixture Scrapper ${tier}-${order}`,
+    specialization: 43,
+    tier,
+    order
+  }))),
+  { id: 1877, name: 'Impact Savant' }
+];
+
+const fixturePublicSpecializations = [
+  {
+    id: 6,
+    name: 'Explosives',
+    major_traits: fixturePublicTraits.filter((trait) => (
+      'specialization' in trait && trait.specialization === 6
+    )).map((trait) => trait.id)
+  },
+  {
+    id: 43,
+    name: 'Scrapper',
+    major_traits: fixturePublicTraits.filter((trait) => (
+      'specialization' in trait && trait.specialization === 43
+    )).map((trait) => trait.id)
+  }
+];
 
 function equipped(
   id: number,
@@ -214,6 +251,43 @@ export class FixtureGw2Gateway implements Gw2Gateway {
     throw new Gw2ccError('GW2_RESOURCE_NOT_FOUND', `No fixture character named ${characterName}.`);
   }
 
+  async getPublicDefinitions(
+    kind: PublicGw2ResourceKind,
+    ids: readonly number[] | undefined,
+    signal?: AbortSignal
+  ): Promise<PublicGw2Definition[]> {
+    if (signal?.aborted) throw new Gw2ccError('CANCELLED', 'Fixture GW2 request was cancelled.');
+    if (ids === undefined) {
+      if (kind !== 'specializations') {
+        throw new Gw2ccError('VALIDATION_ERROR', 'Only fixture specializations may be loaded without IDs.');
+      }
+      return fixturePublicSpecializations.map(({ id, name, major_traits }) => ({
+        id,
+        name,
+        majorTraitIds: major_traits
+      }));
+    }
+    if (kind === 'traits') {
+      return fixturePublicTraits.filter((trait) => ids.includes(trait.id)).map((trait) => ({
+        id: trait.id,
+        name: trait.name,
+        ...('specialization' in trait ? { specializationId: trait.specialization } : {}),
+        ...('tier' in trait ? { tier: trait.tier } : {}),
+        ...('order' in trait ? { order: trait.order } : {})
+      }));
+    }
+    if (kind === 'specializations') {
+      return fixturePublicSpecializations.filter((entry) => ids.includes(entry.id)).map(({ id, name, major_traits }) => ({
+        id,
+        name,
+        majorTraitIds: major_traits
+      }));
+    }
+    const path = `/v2/${kind}` as const;
+    return (await this.get<Array<{ id: number; name: string }>>(undefined, path, { ids }, signal))
+      .map(({ id, name }) => ({ id, name }));
+  }
+
   async get<T>(apiKey: string | undefined, path: `/v2/${string}`, query: Record<string, QueryValue> = {}, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new Gw2ccError('CANCELLED', 'Fixture GW2 request was cancelled.');
     validateGw2V2Path(path);
@@ -273,6 +347,15 @@ export class FixtureGw2Gateway implements Gw2Gateway {
         { id: 101, name: 'Fixture Daily Kryta Vista Viewer' },
         { id: 102, name: 'Fixture Daily Fractal Adept' }
       ],
+      '/v2/skills': [
+        { id: 5806, name: 'Grenade Kit' }
+      ].filter((entry) => (Array.isArray(query.ids) ? query.ids.map(Number) : []).includes(entry.id)),
+      '/v2/traits': fixturePublicTraits.filter((entry) => (
+        Array.isArray(query.ids) ? query.ids.map(Number) : []
+      ).includes(entry.id)),
+      '/v2/specializations': fixturePublicSpecializations.filter((entry) => (
+        Array.isArray(query.ids) ? query.ids.map(Number) : []
+      ).includes(entry.id)),
       '/v2/account/worldbosses': ['fixture_behemoth'],
       '/v2/account/dungeons': ['fixture_ac_story'],
       '/v2/account/dailycrafting': ['fixture_charged_quartz_crystal'],

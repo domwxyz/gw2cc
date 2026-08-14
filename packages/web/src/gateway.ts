@@ -1,12 +1,18 @@
 import {
   Gw2ccError,
+  type MetaBattleBuildResponse,
+  type MetaBattleSearchInput,
+  type MetaBattleSearchResponse,
   type ResearchDocument,
   type ResearchFetchInput,
   type ResearchGateway,
+  type ResearchJsonDocument,
+  type ResearchJsonFetchInput,
   type ResearchSearchInput,
   type ResearchSearchResponse
 } from '@gw2cc/core';
 import { SafePageFetcher } from './fetcher';
+import { MetaBattleClient } from './metabattle';
 import { TavilyClient } from './tavily';
 
 const MAX_EXTERNAL_CONTENT = 36_000;
@@ -22,12 +28,16 @@ function safeExternalUrl(value: string): URL | undefined {
 
 export class LiveResearchGateway implements ResearchGateway {
   readonly fixtureMode = false;
+  private readonly metabattle: MetaBattleClient;
 
   constructor(
     private readonly tavily: TavilyClient,
     private readonly pages: SafePageFetcher,
-    private readonly now: () => number = () => Date.now()
-  ) {}
+    private readonly now: () => number = () => Date.now(),
+    metabattle?: MetaBattleClient
+  ) {
+    this.metabattle = metabattle ?? new MetaBattleClient(pages);
+  }
 
   async search(apiKey: string, input: ResearchSearchInput, signal?: AbortSignal): Promise<ResearchSearchResponse> {
     const response = await this.tavily.search(apiKey, input, signal);
@@ -108,5 +118,17 @@ export class LiveResearchGateway implements ResearchGateway {
         }
       };
     }
+  }
+
+  fetchJson(input: ResearchJsonFetchInput, signal?: AbortSignal): Promise<ResearchJsonDocument> {
+    return this.pages.fetchJson(input.url, signal);
+  }
+
+  searchMetaBattle(input: MetaBattleSearchInput, signal?: AbortSignal): Promise<MetaBattleSearchResponse> {
+    return this.metabattle.search(input, signal);
+  }
+
+  fetchMetaBattleBuild(title: string, signal?: AbortSignal): Promise<MetaBattleBuildResponse> {
+    return this.metabattle.fetchBuild(title, signal);
   }
 }

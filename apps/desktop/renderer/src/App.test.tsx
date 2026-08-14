@@ -59,6 +59,8 @@ beforeEach(async () => {
       credentialConfigured: true,
       searchAvailable: true,
       directFetchAvailable: true,
+      jsonFetchAvailable: true,
+      metaBattleAvailable: true,
       fixtureMode: true,
       message: 'Web search, safe page fetching, and GW2 Wiki research are available.'
     }
@@ -469,9 +471,11 @@ describe('Phase 1 renderer interactions', () => {
     first = {
       ...first,
       research: {
-        credentialConfigured: false,
-        searchAvailable: false,
-        directFetchAvailable: true,
+      credentialConfigured: false,
+      searchAvailable: false,
+      directFetchAvailable: true,
+      jsonFetchAvailable: true,
+      metaBattleAvailable: true,
         fixtureMode: false,
         message: 'Direct fetch only.'
       }

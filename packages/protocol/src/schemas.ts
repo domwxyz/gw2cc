@@ -143,7 +143,8 @@ export const errorSchema = z.object({
     'LLM_KEY_MISSING', 'LLM_AUTH_FAILED', 'LLM_MODEL_NOT_FOUND', 'LLM_TOOLS_UNSUPPORTED',
     'LLM_RATE_LIMITED', 'LLM_UPSTREAM_ERROR',
     'WEB_SEARCH_NOT_CONFIGURED', 'WEB_AUTH_FAILED', 'WEB_RATE_LIMITED', 'WEB_FETCH_BLOCKED',
-    'WEB_FETCH_FAILED', 'WEB_CONTENT_UNSUPPORTED',
+    'WEB_FETCH_FAILED', 'WEB_CONTENT_UNSUPPORTED', 'WEB_JSON_INVALID',
+    'METABATTLE_API_ERROR', 'METABATTLE_PAGE_NOT_FOUND',
     'SECRET_STORAGE_UNAVAILABLE', 'DATABASE_ERROR', 'VALIDATION_ERROR', 'CANCELLED'
   ]),
   message: z.string(),
@@ -179,6 +180,8 @@ export const researchSettingsSchema = z.object({
   credentialConfigured: z.boolean(),
   searchAvailable: z.boolean(),
   directFetchAvailable: z.literal(true),
+  jsonFetchAvailable: z.literal(true),
+  metaBattleAvailable: z.literal(true),
   fixtureMode: z.boolean(),
   message: z.string()
 });

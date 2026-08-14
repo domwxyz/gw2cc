@@ -5,6 +5,8 @@ import {
   type ConnectionProfile,
   type Gw2Gateway,
   type QueryValue,
+  type PublicGw2Definition,
+  type PublicGw2ResourceKind,
   type ResourceCache,
   type SkillSelection,
   type SpecializationSelection
@@ -32,6 +34,7 @@ import { calculateAttributes, isLandAttributeEquipmentSlot } from './stats';
 
 const PUBLIC_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 200;
+const publicIdListSchema = z.array(z.number().int().positive()).max(1000);
 
 export class LiveGw2Gateway implements Gw2Gateway {
   readonly fixtureMode = false;
@@ -229,6 +232,65 @@ export class LiveGw2Gateway implements Gw2Gateway {
 
   async get<T>(apiKey: string | undefined, path: `/v2/${string}`, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<T> {
     return this.client.get<T>(path, apiKey, query, signal);
+  }
+
+  async getPublicDefinitions(
+    kind: PublicGw2ResourceKind,
+    ids: readonly number[] | undefined,
+    signal?: AbortSignal
+  ): Promise<PublicGw2Definition[]> {
+    if (ids === undefined && kind !== 'specializations') {
+      throw new Gw2ccError('VALIDATION_ERROR', 'Only the bounded specialization definition index may be loaded without IDs.');
+    }
+    const requested = ids === undefined
+      ? await this.loadPublicIds('specializations', '/v2/specializations', signal)
+      : new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0));
+    if (requested.size === 0) return [];
+    switch (kind) {
+      case 'items':
+        return [...(await this.loadMany('items', '/v2/items', requested, itemSchema, false, signal)).values()]
+          .map(({ id, name }) => ({ id, name }));
+      case 'skills':
+        return [...(await this.loadMany('skills', '/v2/skills', requested, skillSchema, false, signal)).values()]
+          .map(({ id, name }) => ({ id, name }));
+      case 'traits':
+        return [...(await this.loadMany('traits', '/v2/traits', requested, traitSchema, false, signal)).values()]
+          .map(({ id, name, specialization, tier, order }) => ({
+            id,
+            name,
+            ...(specialization !== undefined ? { specializationId: specialization } : {}),
+            ...(tier !== undefined ? { tier } : {}),
+            ...(order !== undefined ? { order } : {})
+          }));
+      case 'specializations':
+        return [...(await this.loadMany('specializations', '/v2/specializations', requested, specializationSchema, false, signal)).values()]
+          .map(({ id, name, major_traits }) => ({ id, name, majorTraitIds: major_traits }));
+    }
+  }
+
+  private async loadPublicIds(
+    source: string,
+    path: `/v2/${string}`,
+    signal?: AbortSignal
+  ): Promise<Set<number>> {
+    const key = `${source}:ids:en:${GW2_SCHEMA_VERSION}`;
+    const now = this.now();
+    const cached = await this.cache.get<unknown>(key);
+    const parsed = cached && (cached.expiresAt === undefined || cached.expiresAt > now)
+      ? publicIdListSchema.safeParse(cached.payload)
+      : undefined;
+    if (parsed?.success) return new Set(parsed.data);
+
+    const ids = await this.client.getParsed(path, publicIdListSchema, undefined, {}, signal);
+    await this.cache.set({
+      key,
+      source,
+      schemaVersion: GW2_SCHEMA_VERSION,
+      payload: ids,
+      fetchedAt: now,
+      expiresAt: now + PUBLIC_CACHE_TTL_MS
+    });
+    return new Set(ids);
   }
 
   private hasPermissions(...required: string[]): boolean {

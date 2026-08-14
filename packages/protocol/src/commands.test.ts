@@ -48,7 +48,13 @@ describe('transport-neutral protocol validation', () => {
       const first = await harness.client.request('app.bootstrap', {});
       expect(first.connection.selectedCharacterName).toBe('Aurelia Ward');
       expect(first.snapshot?.equipment.length).toBeGreaterThan(5);
-      expect(first.research).toMatchObject({ searchAvailable: true, directFetchAvailable: true, fixtureMode: true });
+      expect(first.research).toMatchObject({
+        searchAvailable: true,
+        directFetchAvailable: true,
+        jsonFetchAvailable: true,
+        metaBattleAvailable: true,
+        fixtureMode: true
+      });
       await expect(harness.client.request('research.settings.test', {})).resolves.toMatchObject({ ok: true, resultCount: 1 });
 
       const second = await harness.client.request('characters.select', { name: 'Sylvari Ranger' });

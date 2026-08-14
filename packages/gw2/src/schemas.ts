@@ -128,7 +128,8 @@ export const specializationSchema = z.object({
   profession: z.string(),
   elite: z.boolean().default(false),
   icon: z.string().optional(),
-  background: z.string().optional()
+  background: z.string().optional(),
+  major_traits: z.array(z.number()).default([])
 }).passthrough();
 
 export const traitSchema = z.object({
@@ -137,6 +138,7 @@ export const traitSchema = z.object({
   description: z.string().optional(),
   icon: z.string().optional(),
   tier: z.number().optional(),
+  order: z.number().optional(),
   slot: z.string().optional(),
   specialization: z.number().optional()
 }).passthrough();

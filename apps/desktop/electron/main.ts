@@ -23,9 +23,10 @@ import {
   CompositeToolExecutor,
   Gw2EventTimerToolExecutor,
   Gw2ToolExecutor,
+  MetaBattleToolExecutor,
   WebResearchToolExecutor
 } from '@gw2cc/tools';
-import { FixtureResearchGateway, LiveResearchGateway, SafePageFetcher, TavilyClient } from '@gw2cc/web';
+import { FixtureResearchGateway, LiveResearchGateway, MetaBattleClient, SafePageFetcher, TavilyClient } from '@gw2cc/web';
 import { ElectronSecretStore } from './secret-store';
 import { createPinnedWebNetworking, type PinnedWebNetworking } from './pinned-web-fetch';
 import { installContextMenu } from './context-menu';
@@ -53,14 +54,19 @@ async function buildApplication(): Promise<Gw2ccApplication> {
     ? new InMemorySecretStore('fixture-key', true)
     : new ElectronSecretStore(storage.secretBlobs);
   if (!fixtureMode) pinnedWebNetworking = createPinnedWebNetworking();
+  const researchPages = fixtureMode
+    ? undefined
+    : new SafePageFetcher({
+        fetch: pinnedWebNetworking!.fetch,
+        resolve: pinnedWebNetworking!.resolve
+      });
   const researchGateway = fixtureMode
     ? new FixtureResearchGateway()
     : new LiveResearchGateway(
         new TavilyClient(globalThis.fetch),
-        new SafePageFetcher({
-          fetch: pinnedWebNetworking!.fetch,
-          resolve: pinnedWebNetworking!.resolve
-        })
+        researchPages!,
+        undefined,
+        new MetaBattleClient(researchPages!, storage.repositories.cache)
       );
   const research = new ResearchService(researchGateway, secrets);
   const eventTimers = fixtureMode
@@ -79,7 +85,8 @@ async function buildApplication(): Promise<Gw2ccApplication> {
   const tools = new CompositeToolExecutor([
     new Gw2ToolExecutor(gateway, secrets, storage.repositories.account),
     new Gw2EventTimerToolExecutor(eventTimers),
-    new WebResearchToolExecutor(research)
+    new WebResearchToolExecutor(research),
+    new MetaBattleToolExecutor(research, gateway)
   ]);
   if (fixtureMode) {
     const currentInstructions = await storage.repositories.settings.get<string>('global-instructions');

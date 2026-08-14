@@ -2,5 +2,8 @@ export * from './extract';
 export * from './fetcher';
 export * from './fixture';
 export * from './gateway';
+export * from './json';
+export * from './metabattle-parser';
+export * from './metabattle';
 export * from './security';
 export * from './tavily';

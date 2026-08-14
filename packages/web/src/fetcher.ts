@@ -1,9 +1,12 @@
-import { Gw2ccError, type ResearchDocument } from '@gw2cc/core';
+import { Gw2ccError, type ResearchDocument, type ResearchJsonDocument } from '@gw2cc/core';
 import { extractHtmlDocument, extractTextDocument } from './extract';
+import { DEFAULT_JSON_BOUNDING_LIMITS, parseAndBoundJson, type JsonBoundingLimits } from './json';
 import { assertSafeHttpUrl, type DnsResolver } from './security';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const ALLOWED_TEXT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plain', 'text/markdown', 'text/x-markdown'];
+const ALLOWED_JSON_TEXT_TYPES = new Set(['text/plain', 'text/json']);
+const RESEARCH_USER_AGENT = 'GW2CC/0.1 public-research (+https://github.com/domwxyz/gw2cc)';
 
 export interface SafePageFetcherOptions {
   fetch: typeof globalThis.fetch;
@@ -12,6 +15,7 @@ export interface SafePageFetcherOptions {
   maxRedirects?: number;
   maxDownloadBytes?: number;
   maxTextCharacters?: number;
+  jsonBoundingLimits?: Partial<JsonBoundingLimits>;
   now?: () => number;
 }
 
@@ -20,6 +24,7 @@ export class SafePageFetcher {
   private readonly maxRedirects: number;
   private readonly maxDownloadBytes: number;
   private readonly maxTextCharacters: number;
+  private readonly jsonBoundingLimits: JsonBoundingLimits;
   private readonly now: () => number;
 
   constructor(private readonly options: SafePageFetcherOptions) {
@@ -27,6 +32,7 @@ export class SafePageFetcher {
     this.maxRedirects = options.maxRedirects ?? 5;
     this.maxDownloadBytes = options.maxDownloadBytes ?? 1_000_000;
     this.maxTextCharacters = options.maxTextCharacters ?? 36_000;
+    this.jsonBoundingLimits = { ...DEFAULT_JSON_BOUNDING_LIMITS, ...options.jsonBoundingLimits };
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -35,6 +41,70 @@ export class SafePageFetcher {
   }
 
   async fetch(urlValue: string, signal?: AbortSignal): Promise<ResearchDocument> {
+    const response = await this.fetchResponse(urlValue, {
+      accept: 'text/html,application/xhtml+xml,text/plain,text/markdown;q=0.9',
+      acceptsContentType: (type) => !type || ALLOWED_TEXT_TYPES.includes(type),
+      defaultContentType: 'text/html'
+    }, signal);
+    const common = {
+      requestedUrl: response.requestedUrl,
+      finalUrl: response.finalUrl,
+      contentType: response.contentType,
+      maxTextCharacters: this.maxTextCharacters,
+      downloadedBytes: response.bytes.byteLength,
+      retrievedAt: response.retrievedAt
+    };
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(response.bytes);
+    return response.contentType === 'text/html' || response.contentType === 'application/xhtml+xml'
+      ? extractHtmlDocument({ ...common, html: text })
+      : extractTextDocument({ ...common, text });
+  }
+
+  async fetchJson(urlValue: string, signal?: AbortSignal): Promise<ResearchJsonDocument> {
+    const response = await this.fetchResponse(urlValue, {
+      accept: 'application/json,application/*+json;q=0.9,text/json;q=0.7,text/plain;q=0.5',
+      acceptsContentType: (type) => !type || type === 'application/json' || /^application\/[a-z0-9!#$&^_.+-]+\+json$/.test(type) || ALLOWED_JSON_TEXT_TYPES.has(type),
+      defaultContentType: 'application/json'
+    }, signal);
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(response.bytes);
+    const bounded = parseAndBoundJson(text, this.jsonBoundingLimits);
+    const domain = new URL(response.finalUrl).hostname.toLowerCase();
+    return {
+      trust: 'untrusted_external',
+      requestedUrl: response.requestedUrl,
+      finalUrl: response.finalUrl,
+      domain,
+      contentType: response.contentType,
+      data: bounded.data,
+      downloadedBytes: response.bytes.byteLength,
+      retrievedAt: response.retrievedAt,
+      bounding: { truncated: bounded.truncated, ...this.jsonBoundingLimits },
+      provenance: {
+        trust: 'untrusted_external',
+        sourceKind: 'live_json',
+        sourceName: 'Public JSON response',
+        url: response.finalUrl,
+        domain,
+        retrievedAt: response.retrievedAt
+      }
+    };
+  }
+
+  private async fetchResponse(
+    urlValue: string,
+    request: {
+      accept: string;
+      acceptsContentType: (contentType: string) => boolean;
+      defaultContentType: string;
+    },
+    signal?: AbortSignal
+  ): Promise<{
+    requestedUrl: string;
+    finalUrl: string;
+    contentType: string;
+    bytes: Uint8Array;
+    retrievedAt: number;
+  }> {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     if (signal?.aborted) controller.abort();
@@ -47,7 +117,7 @@ export class SafePageFetcher {
         const response = await this.options.fetch(current, {
           method: 'GET',
           redirect: 'manual',
-          headers: { Accept: 'text/html,application/xhtml+xml,text/plain,text/markdown;q=0.9' },
+          headers: { Accept: request.accept, 'User-Agent': RESEARCH_USER_AGENT },
           signal: controller.signal
         });
         if (REDIRECT_STATUSES.has(response.status)) {
@@ -77,9 +147,9 @@ export class SafePageFetcher {
           });
         }
         const rawType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
-        if (rawType && !ALLOWED_TEXT_TYPES.includes(rawType)) {
+        if (!request.acceptsContentType(rawType)) {
           void response.body?.cancel();
-          throw new Gw2ccError('WEB_CONTENT_UNSUPPORTED', `The page content type ${rawType} is not supported.`);
+          throw new Gw2ccError('WEB_CONTENT_UNSUPPORTED', `The response content type ${rawType} is not supported.`);
         }
         const declaredLength = Number(response.headers.get('content-length') ?? 0);
         if (declaredLength > this.maxDownloadBytes) {
@@ -90,32 +160,27 @@ export class SafePageFetcher {
         if (!rawType && this.looksBinary(bytes)) {
           throw new Gw2ccError('WEB_CONTENT_UNSUPPORTED', 'The page returned binary content without a supported content type.');
         }
-        const type = rawType || 'text/html';
-        const common = {
+        const type = rawType || request.defaultContentType;
+        return {
           requestedUrl,
           finalUrl: current.toString(),
           contentType: type,
-          maxTextCharacters: this.maxTextCharacters,
-          downloadedBytes: bytes.byteLength,
+          bytes,
           retrievedAt: this.now()
         };
-        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-        return type === 'text/html' || type === 'application/xhtml+xml'
-          ? extractHtmlDocument({ ...common, html: text })
-          : extractTextDocument({ ...common, text });
       }
     } catch (error) {
       if (error instanceof Gw2ccError) {
         if (error.code === 'CANCELLED' && !signal?.aborted && controller.signal.aborted) {
-          throw new Gw2ccError('WEB_FETCH_FAILED', 'The page request timed out.', { retryable: true });
+          throw new Gw2ccError('WEB_FETCH_FAILED', 'The web request timed out.', { retryable: true });
         }
         throw error;
       }
-      if (controller.signal.aborted && signal?.aborted) throw new Gw2ccError('CANCELLED', 'Page fetching was cancelled.');
+      if (controller.signal.aborted && signal?.aborted) throw new Gw2ccError('CANCELLED', 'Web fetching was cancelled.');
       if (controller.signal.aborted) {
-        throw new Gw2ccError('WEB_FETCH_FAILED', 'The page request timed out.', { retryable: true });
+        throw new Gw2ccError('WEB_FETCH_FAILED', 'The web request timed out.', { retryable: true });
       }
-      throw new Gw2ccError('WEB_FETCH_FAILED', 'The page could not be fetched.', { retryable: true, cause: error });
+      throw new Gw2ccError('WEB_FETCH_FAILED', 'The web resource could not be fetched.', { retryable: true, cause: error });
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);

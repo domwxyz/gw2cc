@@ -28,7 +28,14 @@ describe('Tavily research adapter and credential boundary', () => {
 
   it('validates before saving, exposes configured status only, and clears the Tavily secret', async () => {
     const search = vi.fn(async () => ({ trust: 'untrusted_external' as const, source: 'tavily_search' as const, query: 'q', results: [], retrievedAt: 1 }));
-    const gateway = { fixtureMode: false, search, fetchUrl: vi.fn() };
+    const gateway = {
+      fixtureMode: false,
+      search,
+      fetchUrl: vi.fn(),
+      fetchJson: vi.fn(),
+      searchMetaBattle: vi.fn(),
+      fetchMetaBattleBuild: vi.fn()
+    };
     const secrets = new InMemorySecretStore();
     const service = new ResearchService(gateway, secrets);
     const view = await service.setCredential('tvly-private-value');

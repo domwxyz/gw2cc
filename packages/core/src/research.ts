@@ -1,7 +1,10 @@
 import { Gw2ccError } from './errors';
 import type { ResearchGateway, SecretStore } from './ports';
 import type {
+  MetaBattleBuildResponse,
+  MetaBattleSearchResponse,
   ResearchDocument,
+  ResearchJsonDocument,
   ResearchSearchResponse,
   ResearchSettingsView,
   ResearchTestResult
@@ -21,10 +24,12 @@ export class ResearchService {
       credentialConfigured: configured,
       searchAvailable: configured,
       directFetchAvailable: true,
+      jsonFetchAvailable: true,
+      metaBattleAvailable: true,
       fixtureMode: this.gateway.fixtureMode,
       message: configured
-        ? 'Web search, safe page fetching, and GW2 Wiki research are available.'
-        : 'Direct page fetching is available. Add a Tavily key to enable web and GW2 Wiki search.'
+        ? 'Web search, safe page/JSON fetching, MetaBattle, and GW2 Wiki research are available.'
+        : 'Direct page/JSON fetching and MetaBattle are available. Add a Tavily key to enable web and GW2 Wiki search.'
     };
   }
 
@@ -82,6 +87,18 @@ export class ResearchService {
   async fetchUrl(url: string, query: string | undefined, signal?: AbortSignal): Promise<ResearchDocument> {
     const tavilyApiKey = this.gateway.fixtureMode ? undefined : await this.secrets.get('tavily-api-key');
     return this.gateway.fetchUrl({ url, ...(query ? { query } : {}) }, { tavilyApiKey: tavilyApiKey ?? undefined }, signal);
+  }
+
+  fetchJson(url: string, signal?: AbortSignal): Promise<ResearchJsonDocument> {
+    return this.gateway.fetchJson({ url }, signal);
+  }
+
+  searchMetaBattle(query: string, maxResults: number, signal?: AbortSignal): Promise<MetaBattleSearchResponse> {
+    return this.gateway.searchMetaBattle({ query, maxResults }, signal);
+  }
+
+  fetchMetaBattleBuild(title: string, signal?: AbortSignal): Promise<MetaBattleBuildResponse> {
+    return this.gateway.fetchMetaBattleBuild(title, signal);
   }
 
   private async requireTavilyCredential(): Promise<string> {

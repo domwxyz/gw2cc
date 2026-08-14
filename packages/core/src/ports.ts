@@ -20,19 +20,40 @@ import type {
   ToolExecutionOutcome
 } from './chat-domain';
 import type {
+  MetaBattleBuildResponse,
+  MetaBattleSearchInput,
+  MetaBattleSearchResponse,
   ResearchDocument,
   ResearchFetchInput,
+  ResearchJsonDocument,
+  ResearchJsonFetchInput,
   ResearchSearchInput,
   ResearchSearchResponse
 } from './research-domain';
 
 export type QueryValue = string | number | boolean | readonly (string | number | boolean)[];
 
+export type PublicGw2ResourceKind = 'items' | 'skills' | 'traits' | 'specializations';
+
+export interface PublicGw2Definition {
+  id: number;
+  name: string;
+  specializationId?: number;
+  majorTraitIds?: number[];
+  tier?: number;
+  order?: number;
+}
+
 export interface Gw2Gateway {
   readonly fixtureMode: boolean;
   validateKey(apiKey: string): Promise<ConnectionProfile>;
   getCharacterSnapshot(apiKey: string, characterName: string, forceRefresh?: boolean, signal?: AbortSignal): Promise<CharacterSnapshot>;
   get<T>(apiKey: string | undefined, path: `/v2/${string}`, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<T>;
+  getPublicDefinitions?(
+    kind: PublicGw2ResourceKind,
+    ids: readonly number[] | undefined,
+    signal?: AbortSignal
+  ): Promise<PublicGw2Definition[]>;
 }
 
 export type SecretKey =
@@ -51,6 +72,9 @@ export interface ResearchGateway {
     options: { tavilyApiKey?: string },
     signal?: AbortSignal
   ): Promise<ResearchDocument>;
+  fetchJson(input: ResearchJsonFetchInput, signal?: AbortSignal): Promise<ResearchJsonDocument>;
+  searchMetaBattle(input: MetaBattleSearchInput, signal?: AbortSignal): Promise<MetaBattleSearchResponse>;
+  fetchMetaBattleBuild(title: string, signal?: AbortSignal): Promise<MetaBattleBuildResponse>;
 }
 
 export interface SecretStore {
